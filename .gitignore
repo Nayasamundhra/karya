@@ -1,0 +1,44 @@
+# Repository-root ignores for Karya.
+#
+# `backend/.gitignore` covers the backend in detail; the rules here are a
+# repo-wide safety net so a secret can never be committed from a directory that
+# does not have its own .gitignore yet (e.g. a future frontend/).
+
+# --- Secrets (never commit) -------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets.json
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- Node (future frontend) -------------------------------------------------
+node_modules/
+dist/
+build/
+
+# --- Tooling ----------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Editors / OS -----------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- Local data / logs ------------------------------------------------------
+postgres-data/
+*.log

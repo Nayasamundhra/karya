@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "karya-backend"
+version = "0.1.0"
+description = "Karya - multi-tenant staff attendance and presence verification platform (backend)"
+readme = "README.md"
+# NOTE: the target runtime is Python 3.12+; the floor is 3.11 so the project can
+# also be developed on 3.11 toolchains. No 3.12-only syntax is used.
+requires-python = ">=3.11"
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "sqlalchemy>=2.0.36",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.14",
+    # [email] pulls in email-validator, required by the EmailStr fields in
+    # app/schemas so a malformed address is a 422 rather than a failed login.
+    "pydantic[email]>=2.10",
+    "pydantic-settings>=2.7",
+    # Phase 2 - authentication
+    "argon2-cffi>=23.1",  # Argon2id password hashing
+    "pyjwt>=2.10",        # JWT access tokens (HS256)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.28",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = ["error::DeprecationWarning:app.*"]

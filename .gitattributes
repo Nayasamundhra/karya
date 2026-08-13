@@ -1,0 +1,16 @@
+# Normalise line endings to LF everywhere, including the Windows working tree.
+#
+# The backend runs on Linux in Docker, so LF is the correct on-disk form; this
+# also stops the whole tree showing as modified when someone works on another
+# platform. Python, FastAPI and Alembic are all indifferent to LF on Windows.
+* text=auto eol=lf
+
+# Binary files git must never try to normalise.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
