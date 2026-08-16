@@ -137,6 +137,38 @@ def test_empty_cors_configuration_allows_no_origin() -> None:
     assert config.cors_origins == []
 
 
+def test_presence_settings_load_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JWT_SECRET_KEY", GOOD_SECRET)
+    monkeypatch.setenv("MAX_GPS_ACCURACY_METERS", "35.5")
+    monkeypatch.setenv("QR_CHALLENGE_TTL_SECONDS", "45")
+
+    config = build()
+
+    assert config.max_gps_accuracy_meters == 35.5
+    assert config.qr_challenge_ttl_seconds == 45
+
+
+def test_presence_defaults_match_the_specification() -> None:
+    config = build(environment="local", jwt_secret_key=GOOD_SECRET)
+
+    assert config.max_gps_accuracy_meters == 100.0
+    assert config.qr_challenge_ttl_seconds == 30
+
+
+def test_non_positive_presence_thresholds_are_rejected() -> None:
+    """A zero TTL or accuracy budget would make verification meaningless."""
+    for overrides in (
+        {"max_gps_accuracy_meters": 0.0},
+        {"max_gps_accuracy_meters": -10.0},
+        {"qr_challenge_ttl_seconds": 0},
+        {"qr_challenge_ttl_seconds": -30},
+    ):
+        with pytest.raises(ValidationError):
+            build(environment="local", jwt_secret_key=GOOD_SECRET, **overrides)
+
+
 def test_cors_origins_are_trimmed() -> None:
     config = build(
         environment="local",

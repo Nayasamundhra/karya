@@ -206,12 +206,16 @@ def test_no_endpoint_exists_for_changing_a_role() -> None:
     with TestClient(app) as client:
         paths = client.get("/openapi.json").json()["paths"]
 
+    # Kept as an exact set so a future phase cannot add a user-mutation route
+    # without this test noticing. Phase 3 added the two presence endpoints.
     assert set(paths) == {
         "/health",
         "/api/v1/auth/login",
         "/api/v1/auth/refresh",
         "/api/v1/auth/logout",
         "/api/v1/auth/me",
+        "/api/v1/presence/qr/challenge",
+        "/api/v1/presence/verify",
     }
     for path, operations in paths.items():
         for method in operations:

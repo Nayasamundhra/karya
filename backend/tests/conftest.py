@@ -26,13 +26,35 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.main import app
-from app.models import Tenant, User, UserRole, UserStatus
+from app.models import (
+    DEFAULT_GEOFENCE_RADIUS_METERS,
+    AttendanceLocation,
+    Tenant,
+    User,
+    UserRole,
+    UserStatus,
+)
+from app.models.attendance_location import LOCATION_STATUS_ACTIVE
 from app.services.auth.password import hash_password
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 #: Password used by `user_factory` unless a test overrides it.
 DEFAULT_PASSWORD = "correct-horse-battery-staple"
+
+#: The attendance-location coordinates used across the presence tests
+#: (Bangalore, as in the specification's own examples).
+OFFICE_LATITUDE = 12.9716
+OFFICE_LONGITUDE = 77.5946
+
+#: Metres per degree of latitude for this Earth model: R * radians(1).
+#: Exact along a meridian, so a test can place a device a chosen distance away.
+METERS_PER_DEGREE_LATITUDE = 111_194.93
+
+
+def offset_north(latitude: float, meters: float) -> float:
+    """Return ``latitude`` shifted ``meters`` northwards."""
+    return latitude + meters / METERS_PER_DEGREE_LATITUDE
 
 
 def _test_url() -> URL:
@@ -187,6 +209,38 @@ def user_factory(db_session: Session) -> Callable[..., User]:
         db_session.add(user)
         db_session.flush()
         return user
+
+    return _make
+
+
+@pytest.fixture
+def location_factory(db_session: Session) -> Callable[..., AttendanceLocation]:
+    """Create a persisted attendance location for a tenant.
+
+    Defaults to the Bangalore coordinates used throughout the specification and
+    the schema's own 150 m geofence.
+    """
+
+    def _make(
+        tenant: Tenant,
+        *,
+        name: str = "Head Office",
+        latitude: float = OFFICE_LATITUDE,
+        longitude: float = OFFICE_LONGITUDE,
+        geofence_radius_meters: int = DEFAULT_GEOFENCE_RADIUS_METERS,
+        status: str = LOCATION_STATUS_ACTIVE,
+    ) -> AttendanceLocation:
+        location = AttendanceLocation(
+            tenant_id=tenant.id,
+            name=name,
+            latitude=latitude,
+            longitude=longitude,
+            geofence_radius_meters=geofence_radius_meters,
+            status=status,
+        )
+        db_session.add(location)
+        db_session.flush()
+        return location
 
     return _make
 

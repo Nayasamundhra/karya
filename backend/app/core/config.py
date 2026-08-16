@@ -75,6 +75,16 @@ class Settings(BaseSettings):
     # wildcard is rejected outright when credentials are permitted.
     cors_allowed_origins: str = ""
 
+    # --- Presence verification (Phase 3) ------------------------------------
+    # Worst device-reported GPS accuracy still accepted. A phone claiming
+    # "somewhere within 500 m" cannot evidence presence inside a 150 m
+    # geofence, so such a reading is rejected rather than silently trusted.
+    max_gps_accuracy_meters: float = 100.0
+
+    # Lifetime of a dynamic QR challenge. Short by design: the office display
+    # rotates the code, so a photographed QR is useless within seconds.
+    qr_challenge_ttl_seconds: int = 30
+
     # --- Derived values -----------------------------------------------------
     def _build_url(self, database: str) -> str:
         """Compose a psycopg connection URL for ``database``.
@@ -151,6 +161,11 @@ class Settings(BaseSettings):
             raise ValueError("ACCESS_TOKEN_EXPIRE_MINUTES must be positive.")
         if self.refresh_token_expire_days <= 0:
             raise ValueError("REFRESH_TOKEN_EXPIRE_DAYS must be positive.")
+
+        if self.max_gps_accuracy_meters <= 0:
+            raise ValueError("MAX_GPS_ACCURACY_METERS must be positive.")
+        if self.qr_challenge_ttl_seconds <= 0:
+            raise ValueError("QR_CHALLENGE_TTL_SECONDS must be positive.")
 
         if "*" in self.cors_origins:
             # Karya sends credentials, for which a wildcard origin is both
