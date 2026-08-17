@@ -174,6 +174,7 @@ def verify_presence(
     challenge_id: uuid.UUID,
     nonce: str,
     config: Settings | None = None,
+    audit_failures: bool = True,
 ) -> PresenceDecision:
     """Evaluate GPS + QR evidence and return the presence decision.
 
@@ -196,7 +197,11 @@ def verify_presence(
     loses that race the challenge is re-inspected to report the true reason
     (normally ``QR_ALREADY_USED``) instead of assuming success.
 
-    Failed attempts are audited; the caller owns the commit.
+    Failed attempts are audited; the caller owns the commit. Pass
+    ``audit_failures=False`` when the caller writes its own, richer audit row
+    for the same user action - attendance does this, so one rejected check-in
+    produces one audit entry rather than a presence row and an attendance row
+    describing the same event.
     """
     config = config or settings
 
@@ -213,12 +218,13 @@ def verify_presence(
             QRResult(verified=False, reason=FailureReason.NO_ACTIVE_ATTENDANCE_LOCATION),
             FailureReason.NO_ACTIVE_ATTENDANCE_LOCATION,
         )
-        _audit_failure(
-            session,
-            tenant_id=tenant_id,
-            actor_user_id=actor_user_id,
-            decision=decision,
-        )
+        if audit_failures:
+            _audit_failure(
+                session,
+                tenant_id=tenant_id,
+                actor_user_id=actor_user_id,
+                decision=decision,
+            )
         return decision
 
     gps = verify_gps(
@@ -245,12 +251,13 @@ def verify_presence(
         reason = gps.reason or qr.reason
         assert reason is not None  # one of them failed, so a reason exists
         decision = _rejected(gps, qr, reason)
-        _audit_failure(
-            session,
-            tenant_id=tenant_id,
-            actor_user_id=actor_user_id,
-            decision=decision,
-        )
+        if audit_failures:
+            _audit_failure(
+                session,
+                tenant_id=tenant_id,
+                actor_user_id=actor_user_id,
+                decision=decision,
+            )
         return decision
 
     if not qr_service.consume_challenge(
@@ -275,12 +282,13 @@ def verify_presence(
             QRResult(verified=False, challenge_id=qr.challenge_id, reason=reason),
             reason,
         )
-        _audit_failure(
-            session,
-            tenant_id=tenant_id,
-            actor_user_id=actor_user_id,
-            decision=decision,
-        )
+        if audit_failures:
+            _audit_failure(
+                session,
+                tenant_id=tenant_id,
+                actor_user_id=actor_user_id,
+                decision=decision,
+            )
         return decision
 
     return PresenceDecision(

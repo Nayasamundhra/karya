@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -35,6 +36,11 @@ def make_settings(**overrides: object) -> Settings:
 @pytest.fixture
 def config() -> Settings:
     return make_settings()
+
+
+def base64_bytes(segment: str) -> bytes:
+    """Decode a base64url JWT segment, restoring the stripped padding."""
+    return base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
 
 
 def raw_claims(token: str, *, config: Settings) -> dict:
@@ -162,23 +168,70 @@ def test_expired_token_fails(config: Settings) -> None:
         decode_access_token(expired, config=config)
 
 
+def flip(character: str) -> str:
+    """Return a different base64url character."""
+    return "A" if character != "A" else "B"
+
+
 def test_tampered_token_fails(config: Settings) -> None:
     token = create_access_token(
         user_id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="STAFF", config=config
     )
     header, payload, signature = token.split(".")
 
-    # Re-sign the payload with a different key: signature no longer verifies.
+    # 1. Re-sign the payload with a different key.
     forged = jwt.encode(
         raw_claims(token, config=config), "an-attackers-own-secret-key-32chars"
     )
     with pytest.raises(InvalidTokenError):
         decode_access_token(forged, config=config)
 
-    # Flip a character in the signature.
-    broken_sig = signature[:-1] + ("A" if signature[-1] != "A" else "B")
+    # 2. Swap in another token's payload, keeping this token's signature - the
+    #    classic cut-and-paste attack.
+    other = create_access_token(
+        user_id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="SUPER_ADMIN", config=config
+    )
+    with pytest.raises(InvalidTokenError):
+        decode_access_token(
+            f"{header}.{other.split('.')[1]}.{signature}", config=config
+        )
+
+    # 3. Corrupt the signature.
+    #
+    #    The FIRST character is flipped, not the last. A 43-character base64url
+    #    signature carries 258 bits but HMAC-SHA256 produces only 256, so the
+    #    final character has two unused bits and roughly 7% of last-character
+    #    flips decode to byte-identical signatures - leaving the token genuinely
+    #    valid and this assertion failing at random. The first character always
+    #    maps onto real bits.
+    broken_sig = flip(signature[0]) + signature[1:]
+    assert base64_bytes(broken_sig) != base64_bytes(signature)
     with pytest.raises(InvalidTokenError):
         decode_access_token(f"{header}.{payload}.{broken_sig}", config=config)
+
+
+def test_last_signature_character_may_be_cosmetic(config: Settings) -> None:
+    """Documents the base64 padding quirk that made the check above flaky.
+
+    Not a defect: a flip that leaves the decoded bytes unchanged has not
+    tampered with anything, so accepting the token is correct. Pinned here so
+    the reason is discoverable rather than rediscovered.
+    """
+    token = create_access_token(
+        user_id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="STAFF", config=config
+    )
+    signature = token.split(".")[2]
+
+    assert len(signature) == 43
+    assert len(base64_bytes(signature)) == 32  # 43 chars carry 258 bits, not 256
+
+    variant = signature[:-1] + flip(signature[-1])
+    if base64_bytes(variant) == base64_bytes(signature):
+        # Byte-identical, so still a valid token - verification must accept it.
+        decode_access_token(f"{token.rsplit('.', 1)[0]}.{variant}", config=config)
+    else:
+        with pytest.raises(InvalidTokenError):
+            decode_access_token(f"{token.rsplit('.', 1)[0]}.{variant}", config=config)
 
 
 def test_role_escalation_by_editing_the_payload_fails(config: Settings) -> None:

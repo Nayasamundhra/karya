@@ -60,6 +60,13 @@ DB. Confirm `attendance_events` is still 0 afterwards.
 | Cross-tenant | tenant A submits tenant B's challenge → `QR_NOT_FOUND`, and B's challenge must still be usable by B |
 | Spoofing | `gps_verified` / `qr_verified` / `presence_verified` / `distance_meters` / `tenant_id` / `user_id` in the body → 422 |
 | DB authority | flip `users.status`/`role` from a second process; the *same unexpired token* must change behaviour on the next request |
+| Attendance | check-in → duplicate check-in (`ALREADY_CHECKED_IN`) → check-out → duplicate check-out (`NOT_CHECKED_IN`) → check-in again; each success needs its **own fresh QR** |
+| Attendance races | fire N simultaneous check-ins (each with its own challenge) → exactly one succeeds, the rest `ALREADY_CHECKED_IN`; same for check-out |
+
+Attendance refusals are HTTP **200 with `success: false`** plus a `reason`, same
+convention as presence. After a run, assert the per-user event sequence strictly
+alternates CHECK_IN/CHECK_OUT, and that `USED` challenges equal attendance events
+(a consumed challenge with no event would mean the transaction boundary leaked).
 
 Geofence maths for building coordinates: `lat + meters / 111194.93` moves that
 many metres north of `(12.9716, 77.5946)` with a 150 m radius.

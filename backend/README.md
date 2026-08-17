@@ -21,7 +21,8 @@ and, in future, additional signals (Wi-Fi, device integrity, risk scoring).
 | **1** | Database & backend foundation — six entities, relationships, constraints, indexes, migration, Dockerised PostgreSQL, `GET /health` | ✅ Complete |
 | **2** | Authentication, multi-tenant security, RBAC foundation | ✅ Complete |
 | **3** | Presence verification — GPS + geofencing + dynamic QR | ✅ Complete |
-| 4 | Attendance check-in / check-out | Not started |
+| **4** | Attendance check-in / check-out | ✅ Complete |
+| 5 | Reporting, dashboards, admin corrections | Not started |
 
 Phase 2 adds the identity and authorization layer every later feature depends
 on: Argon2id password hashing, JWT access tokens, revocable refresh tokens with
@@ -31,6 +32,10 @@ exactly one table (`refresh_tokens`) and changed no Phase 1 schema.
 Phase 3 adds presence verification: server-side GPS geofencing plus single-use
 dynamic QR challenges. It added **no tables and no migration** — it reuses the
 Phase 1 `attendance_locations`, `qr_challenges` and `audit_logs` tables.
+
+Phase 4 adds the attendance lifecycle — check-in and check-out — on top of that
+verification. Also **no tables and no migration**: it writes to the Phase 1
+`attendance_events` table, which already had every column needed.
 
 See [§10 — Not implemented yet](#10-what-is-intentionally-not-implemented-yet).
 
@@ -204,12 +209,15 @@ Coverage by area:
 | `test_presence_qr.py` | Issuance authorization, nonce quality, expiry, replay, bindings |
 | `test_presence_concurrency.py` | Forced-interleaving proof that only one caller consumes a QR |
 | `test_presence_verify.py` | End-to-end presence, spoofing attempts, tenant isolation, no attendance events |
+| `test_attendance.py` | Check-in/out lifecycle, state transitions, spoofing, QR single-use across endpoints |
+| `test_attendance_concurrency.py` | Forced-interleaving proof that concurrent check-ins produce exactly one event |
 
-`test_presence_concurrency.py` is the only module that commits to the database
-(real concurrency needs separate connections); it deletes its own rows in
-teardown. It also contains a deliberately naive implementation and asserts that
-implementation *would* double-consume — so if the harness ever stops creating
-real lock contention, that test fails rather than the suite quietly passing.
+The two `*_concurrency.py` modules are the only ones that commit to the database
+(real concurrency needs separate connections); each deletes its own rows in
+teardown. Both also contain a deliberately naive implementation and assert it
+*would* break — double-consuming a QR, or double-inserting a CHECK_IN — so if the
+harness ever stops creating real lock contention those tests fail rather than the
+suite quietly passing.
 
 ## 8a. Authentication architecture (Phase 2)
 
@@ -245,6 +253,8 @@ Authorized Operation        require_roles(...) + tenant_scoped_select(...)
 | `GET`  | `/api/v1/auth/me` | Bearer access token | The caller's own profile |
 | `POST` | `/api/v1/presence/qr/challenge` | MANAGER / TENANT_ADMIN | Issue a QR challenge (Phase 3) |
 | `POST` | `/api/v1/presence/verify` | Any active user | Verify presence (Phase 3) |
+| `POST` | `/api/v1/attendance/check-in` | Any active user | Check in (Phase 4) |
+| `POST` | `/api/v1/attendance/check-out` | Any active user | Check out (Phase 4) |
 
 All appear in the OpenAPI docs at `/docs`.
 
@@ -600,6 +610,203 @@ rather than restated at each call site. Phase 3 itself never writes that column.
  "qr":  {"verified": true, "challenge_id": "…"}}
 ```
 
+## 8c. Attendance lifecycle (Phase 4)
+
+Phase 3 asks *"is Rahul physically present?"*. Phase 4 asks the next question:
+*"given that, should Karya record an attendance event?"* — and it is the only
+code that writes to `attendance_events`.
+
+```
+CHECK-IN                             CHECK-OUT
+Authentication                       Authentication
+      ↓                                    ↓
+Attendance state  (must be            Attendance state  (must be
+  NOT_CHECKED_IN)                       CHECKED_IN)
+      ↓                                    ↓
+GPS verification                     GPS verification
+      ↓                                    ↓
+QR verification                      QR verification
+      ↓                                    ↓
+Atomic QR consumption                Atomic QR consumption
+      ↓                                    ↓
+Attendance event (CHECK_IN)          Attendance event (CHECK_OUT)
+      ↓                                    ↓
+Commit                               Commit
+```
+
+### Endpoints
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/v1/attendance/check-in` | Any active user | Record a CHECK_IN |
+| `POST` | `/api/v1/attendance/check-out` | Any active user | Record a CHECK_OUT |
+
+Both take the **same body as `/presence/verify`** — coordinates, accuracy,
+challenge id, nonce — because the schema is literally inherited from it.
+
+```json
+{ "success": true, "event_type": "CHECK_IN", "status": "CHECKED_IN",
+  "attendance_event_id": "…", "event_timestamp": "2026-08-16T16:13:37.071390+05:30",
+  "presence": {"verified": true,
+               "gps": {"verified": true, "distance_meters": 73.0, "accuracy_meters": 12.5},
+               "qr": {"verified": true}},
+  "reason": null }
+```
+
+A refusal is `success: false` with HTTP 200 and a `reason`, matching
+`/presence/verify`: the request was processed, and the presence breakdown is
+what lets a client say *"you are 350 m away"* rather than just *"failed"*.
+
+### Why attendance cannot be created without presence verification
+
+**The server re-runs verification as part of the action.** A client cannot call
+`/presence/verify`, get `PRESENCE_VERIFIED`, and then tell the server "I was
+verified, check me in" — there is no field in which to say it. Every check-in
+and check-out calls the Phase 3 service itself.
+
+Even replaying the *same challenge* fails: `/presence/verify` consumes it, so
+presenting it again to check-in returns `QR_ALREADY_USED`. There is no path from
+an earlier verification to an attendance event.
+
+`app/services/attendance/service.py` contains **no GPS or QR logic at all** — it
+calls `presence_service.verify_presence`, which calls the GPS and QR modules.
+One implementation, so the two entry points cannot drift apart in their security
+behaviour:
+
+```
+attendance service → presence service → gps service
+                                      → qr service
+```
+
+### Why the server controls timestamps
+
+`event_timestamp` is omitted from the INSERT so PostgreSQL's `now()` server
+default fills it, then it is read back to return to the client. The device clock
+never reaches the column, and `event_timestamp` is one of the fields
+`extra="forbid"` rejects outright. The QR's issue time is not used either — only
+the moment the event was actually recorded.
+
+### Why the client cannot choose `user_id` or `tenant_id`
+
+Both come from `current_user`, resolved from the bearer token against the
+database on every request. Neither appears in any attendance schema, so sending
+one is a 422 rather than a silently ignored field. Query parameters and headers
+are equally inert — a test fires `?user_id=…` plus an `X-User-Id` header at
+check-in and asserts the row still belongs to the caller.
+
+### Attendance state
+
+Derived from the user's most recent event — there is deliberately **no
+`current_status` column**. A denormalised status is a second source of truth that
+can drift from the events, and the events are the audit record that matters.
+
+```
+no events            → NOT_CHECKED_IN
+latest = CHECK_IN    → CHECKED_IN
+latest = CHECK_OUT   → NOT_CHECKED_IN
+```
+
+The lookup is scoped by `(tenant_id, user_id)` ordered by `event_timestamp DESC`,
+which is exactly the Phase 1 composite index. Because `CHECK_OUT` returns the
+user to `NOT_CHECKED_IN`, day-after-day cycles work with no reset step.
+
+### Transaction boundaries
+
+One transaction per request, committed once in the route:
+
+```
+BEGIN
+  lock the user row          ← SELECT … FOR UPDATE
+  derive + validate state
+  verify presence            ← GPS, then QR
+  consume the QR challenge   ← atomic conditional UPDATE
+  INSERT the attendance event
+  INSERT the audit row
+COMMIT
+```
+
+Nothing is committed separately, so the database can never hold **a consumed
+challenge with no attendance event**. If anything raises, the session closes
+without a commit and PostgreSQL discards the lot — including the consumption. A
+live run confirmed the invariant: 8 attendance events, exactly 8 challenges in
+`USED`.
+
+### How duplicate check-ins and check-outs are prevented
+
+The naive approach — read the latest event, then insert — races. Two concurrent
+check-ins both read `NOT_CHECKED_IN` and both insert, giving `CHECK_IN,
+CHECK_IN`: a state machine broken by timing rather than by logic.
+
+Phase 4 takes a **row lock on the user** (`SELECT id FROM users WHERE id=… AND
+tenant_id=… FOR UPDATE`) before reading the state. That serialises every
+attendance operation for one user: the second transaction blocks there until the
+first commits, then reads the state, sees the new event and refuses with
+`ALREADY_CHECKED_IN` (or `NOT_CHECKED_IN` for check-out). Different users lock
+different rows, so unrelated staff never contend.
+
+The *user* row is locked rather than the attendance rows because at check-in time
+there may be no attendance rows to lock, and PostgreSQL offers no gap lock under
+READ COMMITTED. The user row always exists, so it is a reliable mutex keyed by
+exactly the right thing.
+
+**Lock order is always user → QR challenge**, so two transactions can never hold
+each other's next lock and deadlock.
+
+### How QR replay stays prevented
+
+Untouched from Phase 3 — the same atomic conditional UPDATE, reached through the
+same service. Two extra guarantees hold across the new endpoints:
+
+- A challenge spent on a check-in **cannot** be reused for the check-out; each
+  action needs its own fresh code.
+- A challenge spent by `/presence/verify` cannot then authorise attendance.
+
+### State is validated before evidence is examined
+
+The order matters. A duplicate check-in is refused **before** the QR is looked
+at, so it does not consume the office's current challenge — the same reasoning
+Phase 3 applies to GPS failures. Otherwise a user tapping the button twice would
+destroy the code for everyone queuing behind them. A test asserts the challenge
+survives a rejected duplicate and still works for the legitimate next action.
+
+### Verification metadata
+
+Every event stores the evidence that justified it, in the existing
+`verification_metadata` JSONB column, built from the presence decision rather
+than restated:
+
+```json
+{"presence": {"verified": true},
+ "gps": {"verified": true, "distance_meters": 73.0, "accuracy_meters": 12.5},
+ "qr":  {"verified": true, "challenge_id": "…"},
+ "attendance_state": "CHECKED_IN"}
+```
+
+The `challenge_id` is recorded, **never the nonce** — the id is enough to
+correlate an event with the challenge that authorised it, whereas the nonce is
+the secret that challenge protects.
+
+### Audit
+
+`ATTENDANCE_CHECK_IN` / `ATTENDANCE_CHECK_OUT` on success, carrying the event id,
+challenge id, distance and accuracy. `ATTENDANCE_CHECK_IN_FAILED` /
+`ATTENDANCE_CHECK_OUT_FAILED` on refusal, carrying the failure reason and the
+state at the time.
+
+One rejected action writes **one** audit row: attendance passes
+`audit_failures=False` to the presence service and writes its own richer entry,
+rather than leaving a presence row and an attendance row describing the same
+event. As in Phase 3 the audit keeps the *internal* reason — a cross-tenant
+attempt is recorded as `QR_TENANT_MISMATCH` even though the client is told
+`QR_NOT_FOUND`.
+
+### Not in Phase 4
+
+No attendance history or reporting endpoint, no hours/overtime/late-arrival
+calculation, no overnight-shift handling, no admin override, correction,
+approval or deletion. Attendance events are treated as immutable audit records;
+administrative correction is a later phase and needs its own explicit trail.
+
 ## 9. Current database entities
 
 Seven tables — the six Phase 1 entities plus one for Phase 2:
@@ -671,8 +878,9 @@ runtime as well as in the schema — see
 
 ## 10. What is intentionally NOT implemented yet
 
-**Deferred to Phase 4 (attendance):** check-in / check-out APIs · attendance
-business logic · attendance history APIs · attendance reports.
+**Deferred to Phase 5 (reporting & administration):** attendance history APIs ·
+attendance reports · hours / overtime / late-arrival calculation · overnight-shift
+rules · admin check-in/out, correction, approval or deletion.
 
 **Deliberately not implemented in Phase 3:** Wi-Fi verification (specified as
 optional) · device fingerprinting / attestation · face recognition · the office
@@ -705,7 +913,8 @@ backend/
 │   │   └── v1/
 │   │       ├── router.py        # aggregates v1 routers
 │   │       ├── auth.py          # login / refresh / logout / me
-│   │       └── presence.py      # qr/challenge / verify
+│   │       ├── presence.py      # qr/challenge / verify
+│   │       └── attendance.py    # check-in / check-out
 │   ├── db/
 │   │   ├── base.py              # DeclarativeBase, naming convention, mixins
 │   │   ├── session.py           # engine + session factory + get_db()
@@ -718,11 +927,14 @@ backend/
 │       │   ├── jwt.py           # access-token mint/verify only
 │       │   ├── refresh_tokens.py# the refresh-token store only
 │       │   └── service.py       # login / refresh / logout flows
-│       └── presence/
-│           ├── results.py       # shared enums + result dataclasses
-│           ├── gps.py           # validation, haversine, geofence
-│           ├── qr.py            # challenge lifecycle, atomic consume
-│           └── service.py       # combines both signals, audit logging
+│       ├── presence/
+│       │   ├── results.py       # shared enums + result dataclasses
+│       │   ├── gps.py           # validation, haversine, geofence
+│       │   ├── qr.py            # challenge lifecycle, atomic consume
+│       │   └── service.py       # combines both signals, audit logging
+│       └── attendance/
+│           ├── results.py       # state machine enums + outcome
+│           └── service.py       # check-in/out, row lock, audit logging
 ├── alembic/                     # env.py, script.py.mako, versions/
 ├── tests/                       # conftest + model/schema/auth/rbac/tenant tests
 ├── alembic.ini
