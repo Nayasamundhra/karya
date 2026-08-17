@@ -66,6 +66,17 @@ class AttendanceEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             "user_id",
             "event_timestamp",
         ),
+        # Tenant-wide day queries (the team dashboard), which constrain tenant
+        # and time but no single user. The composite above cannot serve those:
+        # with `user_id` unconstrained in the middle it degrades to scanning
+        # every index entry the tenant has ever accumulated - measured at 9,600
+        # entries read to return 80 rows after only 120 days, and growing
+        # without bound as history deepens. This index reads just the day.
+        Index(
+            "ix_attendance_events_tenant_id_event_timestamp",
+            "tenant_id",
+            "event_timestamp",
+        ),
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(

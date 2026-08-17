@@ -22,7 +22,8 @@ and, in future, additional signals (Wi-Fi, device integrity, risk scoring).
 | **2** | Authentication, multi-tenant security, RBAC foundation | ✅ Complete |
 | **3** | Presence verification — GPS + geofencing + dynamic QR | ✅ Complete |
 | **4** | Attendance check-in / check-out | ✅ Complete |
-| 5 | Reporting, dashboards, admin corrections | Not started |
+| **5** | Attendance history, daily summary, tenant dashboard APIs | ✅ Complete |
+| 6 | Reporting, analytics, admin corrections | Not started |
 
 Phase 2 adds the identity and authorization layer every later feature depends
 on: Argon2id password hashing, JWT access tokens, revocable refresh tokens with
@@ -36,6 +37,11 @@ Phase 1 `attendance_locations`, `qr_challenges` and `audit_logs` tables.
 Phase 4 adds the attendance lifecycle — check-in and check-out — on top of that
 verification. Also **no tables and no migration**: it writes to the Phase 1
 `attendance_events` table, which already had every column needed.
+
+Phase 5 makes attendance *readable*: self-service history, daily summaries and a
+tenant dashboard. **No new tables** — every view is derived from
+`attendance_events` on each request. It adds one migration, and only an index:
+`(tenant_id, event_timestamp)`, measured as necessary for the team query.
 
 See [§10 — Not implemented yet](#10-what-is-intentionally-not-implemented-yet).
 
@@ -211,6 +217,8 @@ Coverage by area:
 | `test_presence_verify.py` | End-to-end presence, spoofing attempts, tenant isolation, no attendance events |
 | `test_attendance.py` | Check-in/out lifecycle, state transitions, spoofing, QR single-use across endpoints |
 | `test_attendance_concurrency.py` | Forced-interleaving proof that concurrent check-ins produce exactly one event |
+| `test_attendance_read.py` | Self-service reads, session shaping, UTC boundaries, pagination, date limits |
+| `test_attendance_team.py` | RBAC, tenant dashboard, summary arithmetic, cross-tenant 404s, N+1 guard |
 
 The two `*_concurrency.py` modules are the only ones that commit to the database
 (real concurrency needs separate connections); each deletes its own rows in
@@ -255,6 +263,11 @@ Authorized Operation        require_roles(...) + tenant_scoped_select(...)
 | `POST` | `/api/v1/presence/verify` | Any active user | Verify presence (Phase 3) |
 | `POST` | `/api/v1/attendance/check-in` | Any active user | Check in (Phase 4) |
 | `POST` | `/api/v1/attendance/check-out` | Any active user | Check out (Phase 4) |
+| `GET` | `/api/v1/attendance/me` | Any active user | Own attendance for a day (Phase 5) |
+| `GET` | `/api/v1/attendance/me/history` | Any active user | Own daily history (Phase 5) |
+| `GET` | `/api/v1/attendance/team/today` | MANAGER / TENANT_ADMIN | Tenant dashboard (Phase 5) |
+| `GET` | `/api/v1/attendance/users/{user_id}` | MANAGER / TENANT_ADMIN | One user's day (Phase 5) |
+| `GET` | `/api/v1/attendance/users/{user_id}/history` | MANAGER / TENANT_ADMIN | One user's history (Phase 5) |
 
 All appear in the OpenAPI docs at `/docs`.
 
@@ -807,6 +820,211 @@ calculation, no overnight-shift handling, no admin override, correction,
 approval or deletion. Attendance events are treated as immutable audit records;
 administrative correction is a later phase and needs its own explicit trail.
 
+## 8d. Attendance reads (Phase 5)
+
+Phase 4 made Karya able to *record* attendance securely. Phase 5 makes it able to
+*read* it — and every one of these endpoints is strictly read-only.
+
+> **`attendance_events` remains the single source of truth.** Phase 5 adds no
+> `daily_attendance`, no `attendance_status`, no `current_attendance` and no
+> cached status column anywhere. Every state below is computed from the events on
+> each request. A denormalised copy would be a second source of truth that can
+> drift from the record that actually matters.
+
+### Endpoints and who may call them
+
+| Method | Path | STAFF | MANAGER | TENANT_ADMIN |
+| --- | --- | :-: | :-: | :-: |
+| `GET` | `/api/v1/attendance/me` | ✅ | ✅ | ✅ |
+| `GET` | `/api/v1/attendance/me/history` | ✅ | ✅ | ✅ |
+| `GET` | `/api/v1/attendance/team/today` | 403 | ✅ | ✅ |
+| `GET` | `/api/v1/attendance/users/{user_id}` | 403 | ✅ | ✅ |
+| `GET` | `/api/v1/attendance/users/{user_id}/history` | 403 | ✅ | ✅ |
+
+Staff see **only their own** attendance — a colleague's movements are not their
+business. Managers and tenant admins have identical read access across their own
+tenant; Karya's administration is tenant-scoped, and `TENANT_ADMIN` is not a
+platform-wide role. As in Phase 2, `SUPER_ADMIN` is **not** implicitly granted
+tenant data: it must be listed explicitly, and it is not.
+
+Authorization reuses the Phase 2 `require_roles` dependency — no route compares
+role strings by hand.
+
+### How state is derived
+
+```
+no events that day        → NO_RECORD
+last event is CHECK_IN    → CHECKED_IN
+last event is CHECK_OUT   → COMPLETED
+```
+
+`NO_RECORD` is named deliberately. It says only that **no attendance event was
+recorded** — it is *not* a claim that the person was absent from work. They may
+have been on leave, travelling, working elsewhere, or simply unable to reach the
+QR display. Karya cannot tell the difference, and leave and shift management do
+not exist yet, so "ABSENT" would assert something the data does not support.
+
+### Sessions
+
+A day is returned as a list of check-in/check-out **sessions**, so multiple
+cycles in one day are never collapsed:
+
+```json
+{ "date": "2026-08-15", "status": "COMPLETED",
+  "sessions": [
+    {"check_in": "…T09:00:00Z", "check_out": "…T12:00:00Z",
+     "check_in_event_id": "…", "check_out_event_id": "…"},
+    {"check_in": "…T13:00:00Z", "check_out": "…T18:00:00Z",
+     "check_in_event_id": "…", "check_out_event_id": "…"}],
+  "first_check_in": "…T09:00:00Z", "last_check_out": "…T18:00:00Z" }
+```
+
+Either side of a session may be `null`:
+
+- `check_out: null` — the session is still open.
+- `check_in: null` — the session opened on an **earlier day** and closed on this
+  one. Phase 4 guarantees events alternate per *user*, not per calendar day, so a
+  night shift legitimately produces a day whose first event is a CHECK_OUT.
+  Discarding it would lose a real event.
+
+Event ids are always included, so any figure on a dashboard can be traced back to
+the exact rows behind it.
+
+### Dates and timezones
+
+Karya has no per-tenant timezone yet, so **UTC is the canonical calendar** and is
+applied explicitly rather than inherited.
+
+That distinction matters more than it sounds. PostgreSQL's session `TimeZone`
+follows its host — `Asia/Calcutta` on this development machine, `UTC` in the
+Docker image. A bare `date(event_timestamp)` or `::date` would therefore file an
+event recorded at 23:30 UTC under *different days* in the two environments. So
+this code never asks SQL to derive a date: it filters on explicit UTC instants
+and buckets in Python via `astimezone(UTC).date()`. The test suite pins the
+behaviour and passes identically against both servers.
+
+Ranges are **half-open**, `[start, end)`, so an event at exactly midnight belongs
+to the day starting then and no event can fall into two buckets.
+
+Per-tenant timezones are a later phase; they would slot in by replacing
+`day_bounds()` and `utc_date_of()` in `app/services/attendance/queries.py`.
+
+### Pagination and range limits
+
+History is paginated **by day**, newest first.
+
+| Guard | Value |
+| --- | --- |
+| Default page size | 30 days |
+| Maximum page size | 100 days |
+| Maximum date range | 366 days |
+| Default range | the last 30 days ending today |
+
+Anything outside those is a 422. Without them a caller could ask for every event
+a tenant has ever recorded in one request.
+
+**Every date in the range is returned**, including days with no events, as
+`NO_RECORD`. A calendar needs the gaps — otherwise it cannot distinguish "nothing
+recorded" from "outside the range". `pagination.total` therefore counts *days*,
+not events, and needs no COUNT query: the range is known arithmetic.
+
+### Tenant isolation
+
+Every query is constrained by `current_user.tenant_id`, taken from the
+authenticated user's database row. There is no parameter, header or body field
+that can widen it — a test fires `?tenant_id=…` plus `X-Tenant-Id` at the team
+endpoint and asserts the roster is unchanged.
+
+**Cross-tenant lookups return 404, never 403.** A 403 would confirm the id exists
+somewhere and turn the endpoint into a tenant-wide enumeration oracle, so
+"belongs to another tenant" and "does not exist" produce byte-identical
+responses:
+
+```
+GET /api/v1/attendance/users/<a Tenant-B user>   → 404 {"detail": "User not found"}
+GET /api/v1/attendance/users/<random UUID>       → 404 {"detail": "User not found"}
+```
+
+`/attendance/me` takes no identity input at all, so there is nothing to spoof.
+
+### Avoiding N+1 on the team dashboard
+
+`/attendance/team/today` runs **exactly two queries regardless of headcount** —
+one for the tenant roster, one for the day's events — and joins them in memory.
+The obvious alternative (fetch users, then query each user's events) would issue
+one statement per employee on the endpoint most likely to be polled.
+
+A test counts statements at the driver, grows the tenant from 3 to 28 employees,
+and asserts the count does not move.
+
+Everyone active appears, **including people with no events today** — they are
+precisely who a manager is looking for. Inactive users are excluded from the live
+dashboard (a departed employee is noise there) but their history stays fully
+queryable through the history endpoints. Phase 5 hides and deletes nothing.
+
+Summary counts always reconcile:
+
+```
+no_record + checked_in + completed == total_staff
+```
+
+### What the read APIs deliberately do not expose
+
+Attendance is sensitive operational data, so responses carry the minimum:
+timestamps, event ids, derived status, and — for the team view — name and
+employee code.
+
+Never returned: `verification_metadata`, GPS coordinates, distance, accuracy, QR
+challenge ids, nonces, email addresses, roles, password hashes or tokens. The
+verification evidence is retained on the event row for audit; a history screen has
+no use for it, and every field exposed is a field that can leak. Tests assert the
+absence of each by scanning the raw response text.
+
+### Example responses
+
+`GET /api/v1/attendance/me`
+
+```json
+{ "user_id": "…", "state": "CHECKED_IN",
+  "day": { "date": "2026-08-17", "status": "CHECKED_IN",
+           "sessions": [{"check_in": "2026-08-17T09:00:00Z", "check_out": null,
+                         "check_in_event_id": "…", "check_out_event_id": null}],
+           "first_check_in": "2026-08-17T09:00:00Z", "last_check_out": null } }
+```
+
+`GET /api/v1/attendance/me/history?from_date=2026-08-15&to_date=2026-08-17`
+
+```json
+{ "user_id": "…", "from_date": "2026-08-15", "to_date": "2026-08-17",
+  "items": [ { "date": "2026-08-17", "status": "COMPLETED", "sessions": [ … ] },
+             { "date": "2026-08-16", "status": "NO_RECORD", "sessions": [] },
+             { "date": "2026-08-15", "status": "COMPLETED", "sessions": [ … ] } ],
+  "pagination": {"page": 1, "page_size": 30, "total": 3, "total_pages": 1} }
+```
+
+`GET /api/v1/attendance/team/today`
+
+```json
+{ "date": "2026-08-17",
+  "summary": {"total_staff": 4, "no_record": 2, "checked_in": 1, "completed": 1},
+  "employees": [
+    {"user_id": "…", "name": "Rahul Sharma", "employee_code": "EMP-1",
+     "status": "COMPLETED", "check_in": "…", "check_out": "…", "sessions": [ … ]},
+    {"user_id": "…", "name": "Arun Das", "employee_code": "ADM-1",
+     "status": "NO_RECORD", "check_in": null, "check_out": null, "sessions": []}] }
+```
+
+`GET /api/v1/attendance/users/{user_id}` returns the same shape as
+`/attendance/me`, for one user in the caller's own tenant.
+
+### Not in Phase 5
+
+Read-only means read-only: no editing, no deletion, no manual correction, no
+admin check-in. Also absent — working hours, overtime, late arrival, absence
+trends or any other analytics; CSV/Excel/PDF export; leave, holidays and
+weekends; shifts and grace periods; and any frontend. Attendance events remain
+immutable audit records.
+
 ## 9. Current database entities
 
 Seven tables — the six Phase 1 entities plus one for Phase 2:
@@ -878,9 +1096,10 @@ runtime as well as in the schema — see
 
 ## 10. What is intentionally NOT implemented yet
 
-**Deferred to Phase 5 (reporting & administration):** attendance history APIs ·
-attendance reports · hours / overtime / late-arrival calculation · overnight-shift
-rules · admin check-in/out, correction, approval or deletion.
+**Deferred to Phase 6 (reporting & administration):** attendance reports ·
+CSV / Excel / PDF export · hours, overtime, late-arrival and absence analytics ·
+overnight-shift rules · leave, holidays and weekends · admin check-in/out,
+correction, approval or deletion · per-tenant timezones.
 
 **Deliberately not implemented in Phase 3:** Wi-Fi verification (specified as
 optional) · device fingerprinting / attestation · face recognition · the office
@@ -933,8 +1152,9 @@ backend/
 │       │   ├── qr.py            # challenge lifecycle, atomic consume
 │       │   └── service.py       # combines both signals, audit logging
 │       └── attendance/
-│           ├── results.py       # state machine enums + outcome
-│           └── service.py       # check-in/out, row lock, audit logging
+│           ├── results.py       # state machine enums, outcome, read models
+│           ├── service.py       # check-in/out, row lock, audit logging
+│           └── queries.py       # read-only history / daily / team views
 ├── alembic/                     # env.py, script.py.mako, versions/
 ├── tests/                       # conftest + model/schema/auth/rbac/tenant tests
 ├── alembic.ini

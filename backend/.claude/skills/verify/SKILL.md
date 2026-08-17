@@ -62,6 +62,8 @@ DB. Confirm `attendance_events` is still 0 afterwards.
 | DB authority | flip `users.status`/`role` from a second process; the *same unexpired token* must change behaviour on the next request |
 | Attendance | check-in → duplicate check-in (`ALREADY_CHECKED_IN`) → check-out → duplicate check-out (`NOT_CHECKED_IN`) → check-in again; each success needs its **own fresh QR** |
 | Attendance races | fire N simultaneous check-ins (each with its own challenge) → exactly one succeeds, the rest `ALREADY_CHECKED_IN`; same for check-out |
+| Attendance reads | `/attendance/me`, `/me/history`, `/team/today`, `/users/{id}`, `/users/{id}/history`; STAFF gets 403 on the last three; cross-tenant ids give **404 identical to a random UUID** |
+| Read-only proof | snapshot `count(*)` **and** a content hash of `attendance_events`, issue many GETs, re-check — catches UPDATEs a count alone would miss |
 
 Attendance refusals are HTTP **200 with `success: false`** plus a `reason`, same
 convention as presence. After a run, assert the per-user event sequence strictly
@@ -78,7 +80,12 @@ many metres north of `(12.9716, 77.5946)` with a 150 m radius.
   For the container, set `POSTGRES_PORT=5433`.
 - **`TIMESTAMPTZ` comes back as `+05:30` locally** (native PG uses the system
   zone) but `Z` under Docker. Same instant, two spellings — compare parsed
-  datetimes, never string prefixes.
+  datetimes, never string prefixes. This has bitten twice: `iso[11:16]` to read a
+  clock time reads a *different* clock in the two environments. Parse and
+  `.astimezone(UTC)` first.
+- Same root cause on the server side: **never `date(event_timestamp)` or
+  `::date`** in a query. The session TimeZone decides the answer, so days would
+  bucket differently locally vs Docker. Filter on explicit UTC instants instead.
 - **Don't assert headers via `dict(response.headers)`** — that loses HTTP's
   case-insensitivity and made `www-authenticate: Bearer` look absent. Use the
   `HTTPMessage`/`httpx` mapping, or read the raw socket.

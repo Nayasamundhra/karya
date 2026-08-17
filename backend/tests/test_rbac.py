@@ -218,6 +218,11 @@ def test_no_endpoint_exists_for_changing_a_role() -> None:
         "/api/v1/presence/verify",
         "/api/v1/attendance/check-in",
         "/api/v1/attendance/check-out",
+        "/api/v1/attendance/me",
+        "/api/v1/attendance/me/history",
+        "/api/v1/attendance/team/today",
+        "/api/v1/attendance/users/{user_id}",
+        "/api/v1/attendance/users/{user_id}/history",
     }
     for path, operations in paths.items():
         for method in operations:

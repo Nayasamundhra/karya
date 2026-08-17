@@ -12,6 +12,7 @@ Alembic migrations - so every test run also proves the migrations apply.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,8 @@ from app.db.session import get_db
 from app.main import app
 from app.models import (
     DEFAULT_GEOFENCE_RADIUS_METERS,
+    AttendanceEvent,
+    AttendanceEventType,
     AttendanceLocation,
     Tenant,
     User,
@@ -241,6 +244,72 @@ def location_factory(db_session: Session) -> Callable[..., AttendanceLocation]:
         db_session.add(location)
         db_session.flush()
         return location
+
+    return _make
+
+
+@pytest.fixture
+def attendance_event_factory(
+    db_session: Session,
+) -> Callable[..., AttendanceEvent]:
+    """Insert an attendance event at an explicit instant.
+
+    Phase 4's endpoints can only produce events at "now", so reading back a
+    *history* needs rows placed on past days. Setting ``event_timestamp``
+    directly is test setup, not a bypass of the write path - the code under test
+    here is the read layer.
+    """
+
+    def _make(
+        user: User,
+        *,
+        event_type: AttendanceEventType,
+        at: datetime,
+        verification_status: str = "VERIFIED",
+    ) -> AttendanceEvent:
+        event = AttendanceEvent(
+            tenant_id=user.tenant_id,
+            user_id=user.id,
+            event_type=event_type.value,
+            event_timestamp=at,
+            verification_status=verification_status,
+            verification_metadata={"presence": {"verified": True}},
+        )
+        db_session.add(event)
+        db_session.flush()
+        return event
+
+    return _make
+
+
+@pytest.fixture
+def attendance_day_factory(
+    attendance_event_factory: Callable[..., AttendanceEvent],
+) -> Callable[..., tuple[AttendanceEvent, ...]]:
+    """Create one or more completed sessions on a given UTC date."""
+
+    def _make(
+        user: User, day: date, *pairs: tuple[int, int]
+    ) -> tuple[AttendanceEvent, ...]:
+        """``pairs`` are (check_in_hour, check_out_hour) in UTC."""
+        events: list[AttendanceEvent] = []
+        for check_in_hour, check_out_hour in pairs or ((9, 17),):
+            base = datetime.combine(day, time.min, tzinfo=UTC)
+            events.append(
+                attendance_event_factory(
+                    user,
+                    event_type=AttendanceEventType.CHECK_IN,
+                    at=base + timedelta(hours=check_in_hour),
+                )
+            )
+            events.append(
+                attendance_event_factory(
+                    user,
+                    event_type=AttendanceEventType.CHECK_OUT,
+                    at=base + timedelta(hours=check_out_hour),
+                )
+            )
+        return tuple(events)
 
     return _make
 
