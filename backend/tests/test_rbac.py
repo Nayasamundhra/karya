@@ -199,15 +199,28 @@ def test_require_roles_rejects_an_empty_role_list() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_no_endpoint_exists_for_changing_a_role() -> None:
-    """Phase 2 must expose no role-management surface at all."""
+def test_role_mutation_is_confined_to_one_guarded_endpoint() -> None:
+    """Karya must expose exactly one way to change a role, and no way to delete.
+
+    Through Phase 5 this asserted that *no* role-management surface existed.
+    Phase 6 introduces one deliberately, so the guarantee is now narrower rather
+    than gone: exactly one route may change a role, it is TENANT_ADMIN-gated, it
+    refuses self-targeting and it cannot assign SUPER_ADMIN (all covered in
+    ``test_users_admin`` / ``test_users_security``). The exact path set below is
+    still the tripwire that would catch an accidentally added mutation route.
+    """
     from app.main import app
 
     with TestClient(app) as client:
         paths = client.get("/openapi.json").json()["paths"]
 
-    # Kept as an exact set so a future phase cannot add a user-mutation route
-    # without this test noticing. Phase 3 added the two presence endpoints.
+    role_routes = sorted(path for path in paths if path.endswith("/role"))
+    assert role_routes == ["/api/v1/users/{user_id}/role"]
+
+    # Nothing anywhere may delete: Karya keeps identities so history resolves.
+    for path, operations in paths.items():
+        assert "delete" not in operations, path
+
     assert set(paths) == {
         "/health",
         "/api/v1/auth/login",
@@ -223,14 +236,32 @@ def test_no_endpoint_exists_for_changing_a_role() -> None:
         "/api/v1/attendance/team/today",
         "/api/v1/attendance/users/{user_id}",
         "/api/v1/attendance/users/{user_id}/history",
+        # Phase 6 adds the only role-mutating route in Karya. It is confined to
+        # TENANT_ADMIN, refuses self-targeting, and cannot assign SUPER_ADMIN.
+        "/api/v1/users",
+        "/api/v1/users/me",
+        "/api/v1/users/me/password",
+        "/api/v1/users/{user_id}",
+        "/api/v1/users/{user_id}/role",
+        "/api/v1/users/{user_id}/activate",
+        "/api/v1/users/{user_id}/deactivate",
+        "/api/v1/users/{user_id}/audit",
+        "/api/v1/tenant/me",
+    }
+    # PATCH is now expected, but only on the user/tenant management routes that
+    # Phase 6 introduced - never on auth, presence or attendance.
+    patchable = {path for path, ops in paths.items() if "patch" in ops}
+    assert patchable == {
+        "/api/v1/users/me",
+        "/api/v1/users/{user_id}",
+        "/api/v1/users/{user_id}/role",
+        "/api/v1/tenant/me",
     }
     for path, operations in paths.items():
         for method in operations:
-            assert method.lower() in {"get", "post"}, (path, method)
-        # No mutating verbs that could alter a user record.
+            assert method.lower() in {"get", "post", "patch"}, (path, method)
+        # PUT would imply whole-resource replacement, which no endpoint offers.
         assert "put" not in operations
-        assert "patch" not in operations
-        assert "delete" not in operations
 
 
 def test_role_claimed_in_a_token_cannot_override_the_database(

@@ -52,7 +52,7 @@ DB. Confirm `attendance_events` is still 0 afterwards.
 
 | Area | Sequence |
 | --- | --- |
-| Boot | `GET /health`, `GET /openapi.json` (7 paths), `GET /docs` |
+| Boot | `GET /health`, `GET /openapi.json` (23 paths as of Phase 6 — print them, don't assert a count), `GET /docs` |
 | Auth | login → `/auth/me` → refresh (rotate) → replay old refresh (401) → logout → refresh (401) |
 | Enumeration | wrong password / unknown tenant / right user+wrong tenant must return byte-identical 401 |
 | QR issuance | STAFF 403, MANAGER 201, TENANT_ADMIN 201, SUPER_ADMIN 403 (no hierarchy) |
@@ -64,6 +64,9 @@ DB. Confirm `attendance_events` is still 0 afterwards.
 | Attendance races | fire N simultaneous check-ins (each with its own challenge) → exactly one succeeds, the rest `ALREADY_CHECKED_IN`; same for check-out |
 | Attendance reads | `/attendance/me`, `/me/history`, `/team/today`, `/users/{id}`, `/users/{id}/history`; STAFF gets 403 on the last three; cross-tenant ids give **404 identical to a random UUID** |
 | Read-only proof | snapshot `count(*)` **and** a content hash of `attendance_events`, issue many GETs, re-check — catches UPDATEs a count alone would miss |
+| User mgmt | create → login as the new user → promote → deactivate → reactivate → audit; STAFF **and MANAGER** get 403 on every admin route (managers have no user-management powers by design) |
+| Credential cut-off | after deactivate *and* after a password change, the victim's **unexpired refresh token** must 401 too, not just their access token and login |
+| Field smuggling | `role` / `status` / `password_hash` / `tenant_id` / `created_at` on `PATCH /users/{id}` or `/users/me` → 422; role and status have their own endpoints |
 
 Attendance refusals are HTTP **200 with `success: false`** plus a `reason`, same
 convention as presence. After a run, assert the per-user event sequence strictly
@@ -102,3 +105,16 @@ many metres north of `(12.9716, 77.5946)` with a 150 m radius.
   so the bounds hold — don't mistake the coercion for a hole.
 - Presence rejections are **200 with `verified: false`**, not 4xx. Only 401
   (unauthenticated) and 422 (malformed/smuggled) are error codes.
+- **URL-encode query values in the driver.** A search term like `' OR 1=1 --`
+  contains spaces, and `urllib` raises `InvalidURL` before the request is even
+  sent — which looks like a server problem but is not. Use
+  `urllib.parse.quote(term, safe='')`.
+- **Privacy sweeps must search for secret *values*, not the word "password".**
+  `PASSWORD_CHANGED` is a required audit action, so a substring check for
+  "password" false-positives on `GET /users/{id}/audit`. Assert the actual
+  password strings, `$argon2` and `password_hash` are absent instead.
+- The **last-admin 409 is unreachable over HTTP** and that is expected: demoting
+  or deactivating an admin requires a *different* TENANT_ADMIN caller, which
+  implies a second admin exists, and self-targeting is refused first. Verify the
+  invariant at the service layer; over HTTP just confirm the tenant can never be
+  stranded (every route returns 403/404 first).

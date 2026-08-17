@@ -23,7 +23,8 @@ and, in future, additional signals (Wi-Fi, device integrity, risk scoring).
 | **3** | Presence verification — GPS + geofencing + dynamic QR | ✅ Complete |
 | **4** | Attendance check-in / check-out | ✅ Complete |
 | **5** | Attendance history, daily summary, tenant dashboard APIs | ✅ Complete |
-| 6 | Reporting, analytics, admin corrections | Not started |
+| **6** | User, tenant and account management | ✅ Complete |
+| 7 | Reporting, analytics, admin corrections | Not started |
 
 Phase 2 adds the identity and authorization layer every later feature depends
 on: Argon2id password hashing, JWT access tokens, revocable refresh tokens with
@@ -42,6 +43,11 @@ Phase 5 makes attendance *readable*: self-service history, daily summaries and a
 tenant dashboard. **No new tables** — every view is derived from
 `attendance_events` on each request. It adds one migration, and only an index:
 `(tenant_id, event_timestamp)`, measured as necessary for the team query.
+
+Phase 6 lets a tenant administrator manage the people who use Karya: user
+creation, profile and role management, activate/deactivate, self-service password
+change, and a tenant profile. **No new tables and no migration** — the existing
+`users`, `tenants` and `audit_logs` tables already carried everything needed.
 
 See [§10 — Not implemented yet](#10-what-is-intentionally-not-implemented-yet).
 
@@ -219,6 +225,10 @@ Coverage by area:
 | `test_attendance_concurrency.py` | Forced-interleaving proof that concurrent check-ins produce exactly one event |
 | `test_attendance_read.py` | Self-service reads, session shaping, UTC boundaries, pagination, date limits |
 | `test_attendance_team.py` | RBAC, tenant dashboard, summary arithmetic, cross-tenant 404s, N+1 guard |
+| `test_users_admin.py` | Creation, listing, search escaping, profile, role, lifecycle, audit |
+| `test_users_self.py` | Own profile, password change, self-escalation attempts |
+| `test_users_security.py` | RBAC matrix, cross-tenant 404s, field smuggling, attendance preservation |
+| `test_users_concurrency.py` | Last-admin invariant and duplicate-email race, forced interleaving |
 
 The two `*_concurrency.py` modules are the only ones that commit to the database
 (real concurrency needs separate connections); each deletes its own rows in
@@ -268,6 +278,15 @@ Authorized Operation        require_roles(...) + tenant_scoped_select(...)
 | `GET` | `/api/v1/attendance/team/today` | MANAGER / TENANT_ADMIN | Tenant dashboard (Phase 5) |
 | `GET` | `/api/v1/attendance/users/{user_id}` | MANAGER / TENANT_ADMIN | One user's day (Phase 5) |
 | `GET` | `/api/v1/attendance/users/{user_id}/history` | MANAGER / TENANT_ADMIN | One user's history (Phase 5) |
+| `GET`/`PATCH` | `/api/v1/users/me` | Any active user | Own profile (Phase 6) |
+| `POST` | `/api/v1/users/me/password` | Any active user | Change own password (Phase 6) |
+| `GET`/`PATCH` | `/api/v1/tenant/me` | Any active user / TENANT_ADMIN | Tenant profile (Phase 6) |
+| `POST`/`GET` | `/api/v1/users` | TENANT_ADMIN | Create / list users (Phase 6) |
+| `GET`/`PATCH` | `/api/v1/users/{user_id}` | TENANT_ADMIN | Read / update a user (Phase 6) |
+| `PATCH` | `/api/v1/users/{user_id}/role` | TENANT_ADMIN | Change a role (Phase 6) |
+| `POST` | `/api/v1/users/{user_id}/activate` | TENANT_ADMIN | Reactivate (Phase 6) |
+| `POST` | `/api/v1/users/{user_id}/deactivate` | TENANT_ADMIN | Deactivate (Phase 6) |
+| `GET` | `/api/v1/users/{user_id}/audit` | TENANT_ADMIN | Lifecycle audit (Phase 6) |
 
 All appear in the OpenAPI docs at `/docs`.
 
@@ -1025,6 +1044,185 @@ trends or any other analytics; CSV/Excel/PDF export; leave, holidays and
 weekends; shifts and grace periods; and any frontend. Attendance events remain
 immutable audit records.
 
+## 8e. User, tenant and account management (Phase 6)
+
+Phases 1–5 assumed the people using Karya already existed. Phase 6 is how they
+get created, managed and retired — and it adds **no tables and no migration**.
+
+### Endpoints and who may call them
+
+| Method | Path | STAFF | MANAGER | TENANT_ADMIN |
+| --- | --- | :-: | :-: | :-: |
+| `GET` | `/api/v1/users/me` | ✅ | ✅ | ✅ |
+| `PATCH` | `/api/v1/users/me` | ✅ | ✅ | ✅ |
+| `POST` | `/api/v1/users/me/password` | ✅ | ✅ | ✅ |
+| `GET` | `/api/v1/tenant/me` | ✅ | ✅ | ✅ |
+| `PATCH` | `/api/v1/tenant/me` | 403 | 403 | ✅ |
+| `POST` | `/api/v1/users` | 403 | 403 | ✅ |
+| `GET` | `/api/v1/users` | 403 | 403 | ✅ |
+| `GET` | `/api/v1/users/{user_id}` | 403 | 403 | ✅ |
+| `PATCH` | `/api/v1/users/{user_id}` | 403 | 403 | ✅ |
+| `PATCH` | `/api/v1/users/{user_id}/role` | 403 | 403 | ✅ |
+| `POST` | `/api/v1/users/{user_id}/activate` | 403 | 403 | ✅ |
+| `POST` | `/api/v1/users/{user_id}/deactivate` | 403 | 403 | ✅ |
+| `GET` | `/api/v1/users/{user_id}/audit` | 403 | 403 | ✅ |
+
+**MANAGER deliberately gets no user-management powers.** Managers see attendance;
+tenant admins own identity and lifecycle. That separation matters because manager
+accounts are handed out far more freely — a manager who could create logins or
+change roles would widen the blast radius of one compromised account to the whole
+tenant. `SUPER_ADMIN` is not granted anything here either: it is a platform role,
+and Karya's administration is tenant-scoped.
+
+### User lifecycle
+
+```
+            ┌──────────── created by TENANT_ADMIN ─────────────┐
+            ▼                                                  │
+        ACTIVE  ──── deactivate ────►  INACTIVE ──── activate ──┘
+            │                             │
+   can log in, refresh,          cannot log in, refresh,
+   check in / check out          check in or check out
+            │                             │
+            └───── attendance history and audit trail persist ──┘
+```
+
+**Nothing is ever deleted.** Karya is an attendance and audit system: a deleted
+identity would leave historical events pointing at nobody. There is no `DELETE`
+route anywhere in the API, and a test asserts that.
+
+Deactivation takes effect immediately — the authentication dependency re-reads
+`users.status` on every request, so an unexpired access token stops working at
+once — and **revokes every refresh session**, so a 30-day refresh token cannot
+outlive the access it represents. Reactivation restores the ability to
+authenticate and deliberately **does not** touch the password: silently clearing a
+credential would lock the person out rather than help them.
+
+### Roles
+
+Assignable within a tenant: `TENANT_ADMIN`, `MANAGER`, `STAFF`. `SUPER_ADMIN` is
+rejected with a 422 — tenant administration must not be a route to platform
+access.
+
+Role changes live on their own endpoint rather than in the generic profile update,
+so a privilege change is never indistinguishable from a typo correction in the
+audit trail. Two rules apply:
+
+- **Nobody changes their own role**, including a tenant admin. That closes the
+  most direct escalation path: the one role permitted to edit roles could
+  otherwise edit its own.
+- **A tenant never loses its last active administrator** — see below.
+
+### Last-admin protection
+
+Before demoting or deactivating a `TENANT_ADMIN`, the operation verifies another
+active one exists. A tenant that loses its final administrator cannot manage its
+own users again without operator intervention.
+
+This is concurrency-safe, which a `SELECT COUNT(*)` would not be: two
+simultaneous demotions would both observe "there are two admins" and both
+proceed, leaving zero. Instead a single statement locks the tenant's active admin
+rows **and** the target row `FOR UPDATE`, ordered by id so no two transactions
+can deadlock. The second transaction blocks, then re-evaluates against committed
+state, sees the admin the first one removed, and refuses with a 409.
+
+A test forces that interleaving; a companion test asserts the naive
+count-then-update version *does* leave the tenant with zero admins under the same
+harness, so the guarantee cannot quietly become untested.
+
+### Password security
+
+Argon2id throughout, reusing the Phase 2 hashing utility — no second algorithm was
+introduced. Passwords are never logged, never returned in a response and never
+written to an audit row.
+
+**Policy:** 8–128 characters, length only. No composition rules, following NIST
+SP 800-63B: requiring an upper-case letter and a digit pushes people towards
+predictable substitutions without adding real entropy. A new password must also
+differ from the current one and must not be the account's own email or employee
+code. The bounds now live in `app/schemas/fields.py` so login and user management
+cannot drift apart.
+
+`POST /users/me/password` verifies the current password **before** looking at the
+new one, so a caller who has not proven ownership gets no feedback about the new
+value. A wrong current password is a generic `401 Invalid credentials`. The
+current-password field is only required to be non-empty — applying the length
+policy to it would let a short guess return 422 instead of 401, distinguishing
+"malformed" from "wrong". On success **every refresh session is revoked**: a
+changed password usually means the old one is suspect.
+
+### Email normalisation
+
+Emails are trimmed and lower-cased on the way in — for login as well as user
+management. `users` enforces `UNIQUE(tenant_id, email)` on the *stored* value,
+which PostgreSQL compares case-sensitively, so without this `Rahul@acme.com` and
+`rahul@acme.com` would be two accounts in one tenant and the casing someone typed
+would decide whether they got in.
+
+Normalising every write makes that constraint effectively case-insensitive with
+**no migration**: if every stored value is lower-case, uniqueness of the stored
+value *is* uniqueness of the address. (Verified safe: the database contained no
+mixed-case addresses.) Uniqueness stays **per tenant** — the same person may hold
+an account in two tenants.
+
+### Tenant isolation
+
+`tenant_id` is a required argument on every service function and always comes from
+`current_user.tenant_id`. It appears in no request schema, so sending one is a
+422. A grep across the API layer confirms all nine call sites read it from the
+authenticated user and none from a request.
+
+**Cross-tenant operations return 404**, byte-identical to an id that exists
+nowhere — for read, update, role change, activate, deactivate and audit alike.
+Distinguishing them would confirm the id is real and enable tenant enumeration.
+
+### Duplicate handling
+
+Uniqueness is the database's job. A `SELECT` first would still let two concurrent
+creations both pass and both insert, so the `UNIQUE(tenant_id, email)` violation
+is caught inside a `SAVEPOINT` and translated to a clean **409** — the client
+never sees an `IntegrityError`, a constraint name or a table name. Five concurrent
+creations of one email over HTTP produce exactly one 201 and four 409s.
+
+### Search safety
+
+The user search binds its term as a parameter *and* escapes `LIKE`
+metacharacters. Unescaped, a search for `%` becomes the pattern `%%%` and returns
+the entire tenant, and `_` silently means "any single character" — a search box
+that leaks the whole user list. Escaped, the term matches what was typed.
+
+### Audit
+
+Every administrative mutation writes an audit row **in the same transaction** as
+the change, so the two commit together or neither does: `USER_CREATED`,
+`USER_UPDATED`, `USER_ROLE_CHANGED`, `USER_ACTIVATED`, `USER_DEACTIVATED`,
+`PASSWORD_CHANGED`. The actor is always the authenticated caller; the target is
+always the affected user. A failed creation leaves neither a user nor an audit row.
+
+Metadata carries identifiers and before/after values only — for example
+`{"old_role": "STAFF", "new_role": "MANAGER"}`. Never a password, hash, token or
+nonce. `GET /users/{id}/audit` is scoped to the tenant, to `target_type='User'`
+and to that user, so it is not a window onto the tenant's whole audit log.
+
+### Deliberate limitations
+
+- **No password reset by email**, because Karya has no email infrastructure. Doing
+  it properly needs delivery, single-use expiring tokens, anti-enumeration and
+  rate limiting; a half-built version would be worse than none. An administrator
+  can currently only create an account *with* a password, which they must convey
+  out of band.
+- **No email invitations**, for the same reason.
+- **No rate limiting** on login or password change. This is a **production
+  deployment requirement**, not something Phase 6 fakes: it belongs at the edge
+  (or with Redis, which arrives later) rather than as an in-process counter that
+  resets on restart.
+- **No tenant creation, suspension or deletion** — operator concerns, not
+  self-service ones. `PATCH /tenant/me` changes only `name`; `slug` is excluded
+  because it is the identifier every employee types at login, so renaming it would
+  lock out the whole company at once.
+- **Users cannot change their own email**; it is the login identity, and it
+  belongs to tenant administration.
+
 ## 9. Current database entities
 
 Seven tables — the six Phase 1 entities plus one for Phase 2:
@@ -1096,10 +1294,11 @@ runtime as well as in the schema — see
 
 ## 10. What is intentionally NOT implemented yet
 
-**Deferred to Phase 6 (reporting & administration):** attendance reports ·
+**Deferred to Phase 7 (reporting & administration):** attendance reports ·
 CSV / Excel / PDF export · hours, overtime, late-arrival and absence analytics ·
 overnight-shift rules · leave, holidays and weekends · admin check-in/out,
-correction, approval or deletion · per-tenant timezones.
+correction, approval or deletion · per-tenant timezones · password reset by email ·
+email invitations · rate limiting (a deployment requirement, see §8e).
 
 **Deliberately not implemented in Phase 3:** Wi-Fi verification (specified as
 optional) · device fingerprinting / attestation · face recognition · the office
@@ -1133,7 +1332,9 @@ backend/
 │   │       ├── router.py        # aggregates v1 routers
 │   │       ├── auth.py          # login / refresh / logout / me
 │   │       ├── presence.py      # qr/challenge / verify
-│   │       └── attendance.py    # check-in / check-out
+│   │       ├── attendance.py    # check-in / check-out / reads
+│   │       ├── users.py         # user management + self-service
+│   │       └── tenant.py        # tenant profile
 │   ├── db/
 │   │   ├── base.py              # DeclarativeBase, naming convention, mixins
 │   │   ├── session.py           # engine + session factory + get_db()
@@ -1151,10 +1352,13 @@ backend/
 │       │   ├── gps.py           # validation, haversine, geofence
 │       │   ├── qr.py            # challenge lifecycle, atomic consume
 │       │   └── service.py       # combines both signals, audit logging
-│       └── attendance/
-│           ├── results.py       # state machine enums, outcome, read models
-│           ├── service.py       # check-in/out, row lock, audit logging
-│           └── queries.py       # read-only history / daily / team views
+│       ├── attendance/
+│       │   ├── results.py       # state machine enums, outcome, read models
+│       │   ├── service.py       # check-in/out, row lock, audit logging
+│       │   └── queries.py       # read-only history / daily / team views
+│       └── users/
+│           ├── errors.py        # domain errors, mapped to codes by the API
+│           └── service.py       # lifecycle, roles, password, last-admin lock
 ├── alembic/                     # env.py, script.py.mako, versions/
 ├── tests/                       # conftest + model/schema/auth/rbac/tenant tests
 ├── alembic.ini

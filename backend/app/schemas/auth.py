@@ -8,15 +8,21 @@ so an attempted privilege or tenant escalation fails loudly.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-#: Bounds on the tenant slug, matching `tenants.slug VARCHAR(100)`.
-_SLUG_MAX_LENGTH = 100
+from app.schemas.fields import (
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
+    SLUG_MAX_LENGTH,
+    NormalizedEmail,
+)
 
-#: Argon2 has no practical input limit, but capping the accepted length stops a
-#: caller from forcing expensive hashing with a megabyte-long "password".
-_PASSWORD_MIN_LENGTH = 8
-_PASSWORD_MAX_LENGTH = 128
+# Kept as module-level aliases so existing imports and tests continue to work;
+# the values themselves now live in `app.schemas.fields` so login and user
+# management cannot drift apart.
+_SLUG_MAX_LENGTH = SLUG_MAX_LENGTH
+_PASSWORD_MIN_LENGTH = PASSWORD_MIN_LENGTH
+_PASSWORD_MAX_LENGTH = PASSWORD_MAX_LENGTH
 
 
 class LoginRequest(BaseModel):
@@ -29,7 +35,9 @@ class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tenant_slug: str = Field(min_length=1, max_length=_SLUG_MAX_LENGTH)
-    email: EmailStr
+    #: Normalised to lower-case, so the casing someone types cannot decide
+    #: whether they can log in. See `app.schemas.fields.normalize_email`.
+    email: NormalizedEmail
     #: SecretStr so the value cannot surface in a validation error or log line.
     password: SecretStr = Field(
         min_length=_PASSWORD_MIN_LENGTH, max_length=_PASSWORD_MAX_LENGTH

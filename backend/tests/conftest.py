@@ -12,6 +12,7 @@ Alembic migrations - so every test run also proves the migrations apply.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
@@ -336,3 +337,52 @@ def login(client: TestClient) -> Callable[..., Response]:
 def auth_header(access_token: str) -> dict[str, str]:
     """Bearer header for an authenticated request."""
     return {"Authorization": f"Bearer {access_token}"}
+
+
+@dataclass
+class Org:
+    """A tenant with one user of each tenant-level role, plus their tokens."""
+
+    tenant: Tenant
+    admin: User
+    manager: User
+    staff: User
+    admin_token: str
+    manager_token: str
+    staff_token: str
+
+
+@pytest.fixture
+def org_factory(
+    login: Callable[..., Response],
+    tenant_factory: Callable[..., Tenant],
+    user_factory: Callable[..., User],
+) -> Callable[..., Org]:
+    """Build a tenant staffed with a TENANT_ADMIN, a MANAGER and a STAFF user."""
+
+    def _make(slug: str = "acme") -> Org:
+        tenant = tenant_factory(slug=slug)
+        people = {}
+        for key, code, role, name in (
+            ("admin", "ADM-1", UserRole.TENANT_ADMIN, "Arun Das"),
+            ("manager", "MGR-1", UserRole.MANAGER, "Priya Menon"),
+            ("staff", "EMP-1", UserRole.STAFF, "Rahul Sharma"),
+        ):
+            people[key] = user_factory(
+                tenant,
+                email=f"{key}@{slug}.com",
+                employee_code=code,
+                name=name,
+                role=role,
+            )
+        return Org(
+            tenant=tenant,
+            admin=people["admin"],
+            manager=people["manager"],
+            staff=people["staff"],
+            admin_token=login(slug, f"admin@{slug}.com").json()["access_token"],
+            manager_token=login(slug, f"manager@{slug}.com").json()["access_token"],
+            staff_token=login(slug, f"staff@{slug}.com").json()["access_token"],
+        )
+
+    return _make
