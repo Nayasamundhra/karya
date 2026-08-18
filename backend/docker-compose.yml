@@ -1,7 +1,19 @@
-# Karya - Phase 1 infrastructure.
+# Karya - development and integration infrastructure.
 #
-# Only PostgreSQL is provisioned. Redis is intentionally NOT included; it will
-# be introduced when QR challenges / sessions / rate limiting are implemented.
+# `docker compose up -d` still starts PostgreSQL and nothing else, which is what
+# local development wants: the application runs on the host with `--reload`.
+#
+# The `api` service is behind a profile, so it starts only when asked:
+#
+#     docker compose --profile api up -d --build
+#
+# That exists to test the production image end to end - non-root user, health
+# check, signal handling - against a real database.
+#
+# Compose is NOT production orchestration. It has no rolling deploys, no
+# replicas, no secret store and no scheduling. A real deployment needs
+# Kubernetes / ECS / Nomad or a managed platform; that is deliberately out of
+# scope here and documented in docs/PRODUCTION.md.
 #
 # Credentials, database name and host port are all read from `.env` (compose
 # loads it automatically from this directory). Nothing is hardcoded.
@@ -34,6 +46,38 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  api:
+    profiles: ["api"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: karya-api
+    restart: unless-stopped
+    # Everything comes from the environment; no secret is baked into the image.
+    env_file: .env
+    environment:
+      # Overrides `.env` for in-network addressing: from inside the container the
+      # database is the compose service, not localhost, and it always listens on
+      # 5432 whatever host port was published.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      # Compose is used for integration testing, not production, so the
+      # production-only configuration rules would be misleading here.
+      ENVIRONMENT: local
+      LOG_FORMAT: json
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        # Waits for `pg_isready`, not merely for the container to exist. The API
+        # would start either way - it reports itself unready rather than crashing
+        # - but starting in order makes an integration run's logs readable.
+        condition: service_healthy
+    # Migrations are NOT run by the container's entrypoint: two replicas starting
+    # together would both attempt them. Run them as a one-off deploy step:
+    #
+    #     docker compose --profile api run --rm api alembic upgrade head
 
 volumes:
   karya-postgres-data:

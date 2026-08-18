@@ -1,0 +1,72 @@
+# Karya backend - pinned runtime dependency closure.
+#
+# WHY THIS FILE EXISTS
+# ====================
+# `pyproject.toml` declares ranges (`fastapi>=0.115`), which is right for a
+# library and wrong for a deployment: two builds a week apart would install
+# different code. This file pins every package in the runtime closure - direct
+# dependencies and their transitive ones - so `pip install --constraint
+# constraints.txt .` resolves identically every time.
+#
+# The Dockerfile uses it. Local development deliberately does not, so that a
+# broken upstream release is discovered here rather than in production.
+#
+# HOW IT WAS PRODUCED
+# ===================
+# In a clean virtualenv with nothing else installed:
+#
+#     python -m venv /tmp/lock && /tmp/lock/bin/pip install .
+#     /tmp/lock/bin/pip freeze --exclude-editable
+#
+# so it is the resolver's own answer, not a hand-curated list. Regenerate the
+# same way after changing a dependency in `pyproject.toml`, and run the test
+# suite against the result before committing it.
+#
+# HONEST LIMITS
+# =============
+# * No hashes. `--require-hashes` would be stronger - it defends against a
+#   tampered index - but hashes must cover every platform wheel a build might
+#   pull, and this project has no lock tool to maintain them. Version pinning is
+#   the guarantee on offer; it is not supply-chain integrity.
+# * Resolved on Windows/CPython 3.12. The versions are platform-independent, but
+#   a package that resolves differently per platform could differ on Linux.
+#   Constraints only bound what pip installs, so an unused entry is ignored
+#   rather than being an error.
+# * Pins are not security updates. Review them deliberately - see
+#   docs/PRODUCTION.md - rather than assuming a pinned tree stays safe.
+#
+alembic==1.19.1
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+argon2-cffi-bindings==25.1.0
+argon2-cffi==25.1.0
+cffi==2.1.1
+click==8.4.2
+colorama==0.4.6
+dnspython==2.8.0
+email-validator==2.3.0
+fastapi==0.141.1
+greenlet==3.5.5
+h11==0.16.0
+httptools==0.8.0
+idna==3.19
+Mako==1.4.1
+MarkupSafe==3.0.3
+psycopg-binary==3.3.4
+psycopg==3.3.4
+pycparser==3.0
+pydantic-settings==2.15.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+PyJWT==2.13.0
+python-dotenv==1.2.3
+PyYAML==6.0.3
+SQLAlchemy==2.0.52
+starlette==1.6.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+tzdata==2026.3
+uvicorn==0.52.3
+watchfiles==1.2.0
+websockets==17.0.1

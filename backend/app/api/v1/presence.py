@@ -15,6 +15,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.limits import (
+    PRESENCE_RATE_LIMIT,
+    QR_CHALLENGE_RATE_LIMIT,
+    RATE_LIMITED_RESPONSE,
+)
 from app.models.user import User, UserRole
 from app.schemas.presence import (
     PresenceVerificationRequest,
@@ -44,9 +49,14 @@ _NO_LOCATION_DETAIL = "No active attendance location is configured"
     response_model=QRChallengeResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Issue a short-lived QR challenge for the office display",
+    # Per issuer, not per tenant: the office display refreshes roughly twice a
+    # minute, so the budget is an order of magnitude above normal use and still
+    # stops a script from flooding the table with challenges.
+    dependencies=[QR_CHALLENGE_RATE_LIMIT],
     responses={
         403: {"description": "Insufficient permissions"},
         409: {"description": _NO_LOCATION_DETAIL},
+        **RATE_LIMITED_RESPONSE,
     },
 )
 def create_qr_challenge(
@@ -83,7 +93,8 @@ def create_qr_challenge(
     "/verify",
     response_model=PresenceVerificationResponse,
     summary="Verify physical presence from GPS and QR evidence",
-    responses={401: {"description": "Not authenticated"}},
+    dependencies=[PRESENCE_RATE_LIMIT],
+    responses={401: {"description": "Not authenticated"}, **RATE_LIMITED_RESPONSE},
 )
 def verify_presence(
     payload: PresenceVerificationRequest,

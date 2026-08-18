@@ -176,14 +176,22 @@ def test_check_in_creates_exactly_one_event_with_correct_content(
 def test_event_timestamp_is_server_generated(
     client: TestClient, db_session: Session, office: Callable[..., Office]
 ) -> None:
-    """The device clock never reaches event_timestamp."""
+    """The device clock never reaches event_timestamp.
+
+    Bracketed with ``clock_timestamp()``, not ``now()``. ``now()`` is the
+    *transaction start* time and is therefore constant for the whole of this test's
+    transaction, so it cannot bound an instant that occurs inside it - and Phase 7
+    changed the column default to ``clock_timestamp()`` for exactly that reason (see
+    the migration and ``test_attendance_concurrency``). The property being asserted
+    is unchanged: the value comes from the server's clock, not the client's.
+    """
     o = office()
-    before = db_session.scalar(select(text("now()")))
+    before = db_session.scalar(select(text("clock_timestamp()")))
 
     body = check_in(client, o).json()
 
     event = db_session.scalars(select(AttendanceEvent)).one()
-    after = db_session.scalar(select(text("now()")))
+    after = db_session.scalar(select(text("clock_timestamp()")))
     assert event.event_timestamp.tzinfo is not None
     assert before <= event.event_timestamp <= after
     # Same instant surfaced to the client (offsets may differ; compare moments).

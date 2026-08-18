@@ -20,10 +20,11 @@ import uuid
 from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.core.context import bind_principal
 from app.db.session import get_db
 from app.models.user import User, UserRole, UserStatus
 from app.services.auth.jwt import InvalidTokenError, decode_access_token
@@ -53,7 +54,7 @@ def _unauthorized() -> HTTPException:
 
 
 def get_current_user(
-    session: DbSession, credentials: BearerCredentials = None
+    request: Request, session: DbSession, credentials: BearerCredentials = None
 ) -> User:
     """Resolve and validate the caller, returning their database row.
 
@@ -92,7 +93,27 @@ def get_current_user(
     if claims.tenant_id != user.tenant_id:
         raise _unauthorized()
 
+    _record_principal(request, user)
     return user
+
+
+def _record_principal(request: Request, user: User) -> None:
+    """Publish the verified caller for log correlation only.
+
+    Written in two places because they are read from two places. The context
+    variables are what a service deep in the call stack sees, since it runs in the
+    same worker thread. ``request.state`` is a plain dict on the ASGI scope, which
+    is what the access-log middleware sees - it runs in the event loop, whose
+    context is not the thread's.
+
+    Both are written *after* identity has been verified against the database, so a
+    log line naming a user is never a value the caller chose.
+    """
+    bind_principal(user_id=user.id, tenant_id=user.tenant_id)
+    request.state.principal = {
+        "user_id": str(user.id),
+        "tenant_id": str(user.tenant_id),
+    }
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]

@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Annotated
 
 from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.limits import ADMIN_WRITE_RATE_LIMIT, RATE_LIMITED_RESPONSE
 from app.models.tenant import Tenant
 from app.models.user import User, UserRole
 from app.schemas.tenant import TenantResponse, TenantUpdateRequest
@@ -50,9 +51,11 @@ def read_own_tenant(session: DbSession, current_user: CurrentUser) -> TenantResp
     "/me",
     response_model=TenantResponse,
     summary="Update the caller's own tenant",
+    dependencies=[ADMIN_WRITE_RATE_LIMIT],
     responses={
         401: {"description": "Not authenticated"},
         403: {"description": "Insufficient permissions"},
+        **RATE_LIMITED_RESPONSE,
     },
 )
 def update_own_tenant(

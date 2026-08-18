@@ -1,0 +1,45 @@
+# Keep the build context small and make sure nothing sensitive or
+# machine-specific can be copied into an image layer.
+
+# --- Secrets (never in an image) --------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Virtualenvs and caches (host-specific, and large) ----------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Not needed at runtime --------------------------------------------------
+tests/
+docs/
+.claude/
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# NOTE: README.md is deliberately NOT excluded. `pyproject.toml` declares
+# `readme = "README.md"`, so the build backend needs it present or the wheel
+# build fails. It is small, and it contains nothing sensitive.
+
+# --- Editors / OS / VCS -----------------------------------------------------
+.git/
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

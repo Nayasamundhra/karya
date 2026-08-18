@@ -24,6 +24,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.limits import (
+    ADMIN_WRITE_RATE_LIMIT,
+    PASSWORD_CHANGE_RATE_LIMIT,
+    RATE_LIMITED_RESPONSE,
+)
 from app.models.user import User, UserRole, UserStatus
 from app.schemas.user import (
     PasswordChangeRequest,
@@ -129,9 +134,15 @@ def update_own_profile(
     "/me/password",
     response_model=PasswordChangeResponse,
     summary="Change the caller's own password",
+    # The tightest budget in Karya. This endpoint verifies a password, so an
+    # unlimited one is an oracle for guessing the *current* password of an account
+    # whose access token has already leaked - and nobody legitimately changes their
+    # password five times in a quarter of an hour.
+    dependencies=[PASSWORD_CHANGE_RATE_LIMIT],
     responses={
         400: {"description": "New password rejected"},
         401: {"description": "Not authenticated, or current password incorrect"},
+        **RATE_LIMITED_RESPONSE,
     },
 )
 def change_own_password(
@@ -187,10 +198,12 @@ def change_own_password(
     response_model=UserDetailResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a user in the caller's tenant",
+    dependencies=[ADMIN_WRITE_RATE_LIMIT],
     responses={
         401: {"description": "Not authenticated"},
         403: {"description": "Insufficient permissions"},
         409: {"description": "Email or employee code already in use"},
+        **RATE_LIMITED_RESPONSE,
     },
 )
 def create_user(
@@ -302,11 +315,13 @@ def read_user(
     "/{user_id}",
     response_model=UserDetailResponse,
     summary="Update one user's profile",
+    dependencies=[ADMIN_WRITE_RATE_LIMIT],
     responses={
         401: {"description": "Not authenticated"},
         403: {"description": "Insufficient permissions"},
         404: {"description": _USER_NOT_FOUND},
         409: {"description": "Email or employee code already in use"},
+        **RATE_LIMITED_RESPONSE,
     },
 )
 def update_user(
@@ -346,11 +361,13 @@ def update_user(
     "/{user_id}/role",
     response_model=UserDetailResponse,
     summary="Change one user's role",
+    dependencies=[ADMIN_WRITE_RATE_LIMIT],
     responses={
         401: {"description": "Not authenticated"},
         403: {"description": "Insufficient permissions, or changing your own role"},
         404: {"description": _USER_NOT_FOUND},
         409: {"description": "Would leave the tenant without an administrator"},
+        **RATE_LIMITED_RESPONSE,
     },
 )
 def change_user_role(
@@ -420,11 +437,13 @@ def _set_status(
     "/{user_id}/deactivate",
     response_model=UserDetailResponse,
     summary="Deactivate a user",
+    dependencies=[ADMIN_WRITE_RATE_LIMIT],
     responses={
         401: {"description": "Not authenticated"},
         403: {"description": "Insufficient permissions, or deactivating yourself"},
         404: {"description": _USER_NOT_FOUND},
         409: {"description": "Would leave the tenant without an administrator"},
+        **RATE_LIMITED_RESPONSE,
     },
 )
 def deactivate_user(
@@ -443,10 +462,12 @@ def deactivate_user(
     "/{user_id}/activate",
     response_model=UserDetailResponse,
     summary="Reactivate a user",
+    dependencies=[ADMIN_WRITE_RATE_LIMIT],
     responses={
         401: {"description": "Not authenticated"},
         403: {"description": "Insufficient permissions"},
         404: {"description": _USER_NOT_FOUND},
+        **RATE_LIMITED_RESPONSE,
     },
 )
 def activate_user(

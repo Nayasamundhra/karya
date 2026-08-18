@@ -406,3 +406,188 @@ def test_a_challenge_is_never_consumed_without_an_event(
         )
 
     assert used == events == 1
+
+
+# ---------------------------------------------------------------------------
+# Event ordering under contention (Phase 7)
+# ---------------------------------------------------------------------------
+#
+# The row lock serialises the *decision*. It cannot serialise a timestamp that was
+# already fixed when the transaction began - which is exactly what
+# `DEFAULT now()` is, since `now()` returns the transaction start time.
+#
+# So the interleaving below is the reverse of the one above: B's transaction begins
+# FIRST and then blocks on A's lock. Under `now()` that produced a legitimate
+# CHECK_OUT stamped *earlier* than the CHECK_IN it followed, and the derived state
+# stayed CHECKED_IN for a user who had checked out.
+
+
+@dataclass
+class ReverseInterleaving:
+    """Outcomes of an interleaving where B's transaction began before A's."""
+
+    first: AttendanceOutcome
+    second: AttendanceOutcome
+    second_blocked: bool
+
+
+def interleave_with_older_second_transaction(
+    engine: Engine,
+    operation: Callable[[Session, int], AttendanceOutcome],
+) -> ReverseInterleaving:
+    """Run ``operation`` twice, with B's transaction *older* than A's.
+
+    B is forced to BEGIN first (a trivial statement starts its transaction and
+    therefore fixes its ``now()``), then A begins, takes the user row lock and acts.
+    B only reaches the lock afterwards, so B commits second while carrying the
+    earlier transaction timestamp - the ordering hazard being tested.
+    """
+    session_a = Session(engine)
+    session_b = Session(engine)
+    outcome: dict[str, AttendanceOutcome] = {}
+    b_entered = threading.Event()
+
+    try:
+        # B's transaction starts here, before A exists at all.
+        session_b.execute(select(func.now()))
+        time.sleep(0.2)
+
+        first = operation(session_a, 0)
+        session_a.flush()
+
+        def run_second() -> None:
+            b_entered.set()
+            outcome["value"] = operation(session_b, 1)
+            session_b.commit()
+
+        thread_b = threading.Thread(target=run_second, daemon=True)
+        thread_b.start()
+        assert b_entered.wait(timeout=10), "second transaction never started"
+        time.sleep(LOCK_WAIT_SECONDS)
+
+        second_blocked = thread_b.is_alive()
+
+        session_a.commit()
+        thread_b.join(timeout=30)
+        assert not thread_b.is_alive(), "second transaction deadlocked"
+    finally:
+        session_a.close()
+        session_b.close()
+
+    return ReverseInterleaving(
+        first=first, second=outcome["value"], second_blocked=second_blocked
+    )
+
+
+def stored_event_types(engine: Engine, tenant_id: uuid.UUID) -> list[str]:
+    with Session(engine) as session:
+        return [
+            event.event_type
+            for event in session.scalars(
+                select(AttendanceEvent)
+                .where(AttendanceEvent.tenant_id == tenant_id)
+                .order_by(AttendanceEvent.event_timestamp)
+            )
+        ]
+
+
+def test_a_check_out_committed_second_is_never_stamped_before_the_check_in(
+    engine: Engine, committed: Fixture
+) -> None:
+    """The regression this migration exists for.
+
+    A checks in; B - whose transaction is older - was blocked on the lock, wakes,
+    correctly sees CHECKED_IN and checks out. Both succeed, and the stored order
+    must match the order they actually happened in.
+    """
+
+    def action(session: Session, index: int) -> AttendanceOutcome:
+        if index == 0:
+            return attendance_service.check_in(session, **committed.evidence(0))
+        return attendance_service.check_out(session, **committed.evidence(1))
+
+    result = interleave_with_older_second_transaction(engine, action)
+
+    assert result.second_blocked, "no lock contention - the test proved nothing"
+    assert result.first.success is True
+    assert result.second.success is True
+
+    assert stored_event_types(engine, committed.tenant_id) == ["CHECK_IN", "CHECK_OUT"]
+    with Session(engine) as session:
+        assert (
+            attendance_service.get_current_state(
+                session, tenant_id=committed.tenant_id, user_id=committed.user_id
+            )
+            is AttendanceState.NOT_CHECKED_IN
+        )
+
+
+def test_a_now_default_would_invert_the_pair(
+    engine: Engine, committed: Fixture
+) -> None:
+    """Guards the test above from becoming vacuous.
+
+    Stamps each event with ``now()`` explicitly - reproducing exactly what the
+    pre-Phase-7 column default did - under the identical interleaving. If this stops
+    failing, the harness has stopped producing an older second transaction and the
+    test above would pass regardless of the column default.
+    """
+
+    def action(session: Session, index: int) -> AttendanceOutcome:
+        event_type = (
+            AttendanceEventType.CHECK_IN if index == 0 else AttendanceEventType.CHECK_OUT
+        )
+        outcome = (
+            attendance_service.check_in(session, **committed.evidence(0))
+            if index == 0
+            else attendance_service.check_out(session, **committed.evidence(1))
+        )
+        # Overwrite with the transaction-start time, which is what `now()` yields.
+        session.execute(
+            AttendanceEvent.__table__.update()
+            .where(AttendanceEvent.id == outcome.event_id)
+            .values(event_timestamp=func.now())
+        )
+        assert outcome.event_type is event_type
+        return outcome
+
+    result = interleave_with_older_second_transaction(engine, action)
+
+    assert result.first.success is True
+    assert result.second.success is True
+    # Inverted: the CHECK_OUT carries the older transaction's timestamp.
+    assert stored_event_types(engine, committed.tenant_id) == ["CHECK_OUT", "CHECK_IN"]
+    with Session(engine) as session:
+        # And the user is left looking checked in, which is the actual harm.
+        assert (
+            attendance_service.get_current_state(
+                session, tenant_id=committed.tenant_id, user_id=committed.user_id
+            )
+            is AttendanceState.CHECKED_IN
+        )
+
+
+def test_events_written_in_one_transaction_get_distinct_timestamps(
+    engine: Engine, committed: Fixture
+) -> None:
+    """``now()`` is constant within a transaction, so two events written in one
+    shared a timestamp and the "latest event" query broke the tie arbitrarily -
+    differently depending on whether the planner chose a sequential or index scan.
+    """
+    with Session(engine) as session:
+        first = attendance_service.check_in(session, **committed.evidence(0))
+        second = attendance_service.check_out(session, **committed.evidence(1))
+        session.commit()
+
+        assert first.success and second.success
+        stamps = [
+            event.event_timestamp
+            for event in session.scalars(
+                select(AttendanceEvent)
+                .where(AttendanceEvent.tenant_id == committed.tenant_id)
+                .order_by(AttendanceEvent.event_timestamp)
+            )
+        ]
+
+    assert len(set(stamps)) == 2, "two events in one transaction shared a timestamp"
+    assert stored_event_types(engine, committed.tenant_id) == ["CHECK_IN", "CHECK_OUT"]

@@ -21,7 +21,12 @@ import app.models  # noqa: F401  (side-effecting import)
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` is load-bearing, not tidiness. `fileConfig`
+    # defaults to True, which disables every logger that already exists - and since
+    # this module imports `app.core.config`, that includes all of Karya's. Any
+    # process that runs Alembic in-process (the test suite does; a deployment hook
+    # might) would afterwards emit no application logs at all, silently.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

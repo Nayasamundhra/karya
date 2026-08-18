@@ -223,6 +223,9 @@ def test_role_mutation_is_confined_to_one_guarded_endpoint() -> None:
 
     assert set(paths) == {
         "/health",
+        # Phase 7 splits the probes: liveness stays database-free, readiness
+        # reports whether the process can actually serve a request.
+        "/ready",
         "/api/v1/auth/login",
         "/api/v1/auth/refresh",
         "/api/v1/auth/logout",

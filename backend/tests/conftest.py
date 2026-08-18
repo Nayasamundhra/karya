@@ -26,6 +26,7 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.rate_limit import get_rate_limiter
 from app.db.session import get_db
 from app.main import app
 from app.models import (
@@ -59,6 +60,25 @@ METERS_PER_DEGREE_LATITUDE = 111_194.93
 def offset_north(latitude: float, meters: float) -> float:
     """Return ``latitude`` shifted ``meters`` northwards."""
     return latitude + meters / METERS_PER_DEGREE_LATITUDE
+
+
+@pytest.fixture(autouse=True)
+def fresh_rate_limits() -> Iterator[None]:
+    """Start every test from an empty rate-limit state.
+
+    Rate limiting is left **enabled** during the suite rather than switched off,
+    because a limiter that silently blocks a legitimate flow is exactly the kind of
+    regression this suite should catch - and it cannot catch it if it is disabled.
+
+    What has to be isolated is the *counters*, which live in one process-wide
+    limiter while hundreds of tests share it. Clearing them here makes each test
+    behave like a freshly started process, so a test's own handful of requests is
+    all that counts against its budget. Without this, tests would fail depending on
+    what ran before them.
+    """
+    get_rate_limiter().reset()
+    yield
+    get_rate_limiter().reset()
 
 
 def _test_url() -> URL:

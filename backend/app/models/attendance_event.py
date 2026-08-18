@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Double, ForeignKey, Index, String, func
+from sqlalchemy import DateTime, Double, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -40,10 +40,10 @@ class VerificationStatus(enum.StrEnum):
 class AttendanceEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     """An immutable record of a staff check-in or check-out.
 
-    ``event_timestamp`` is **server-generated** (``now()``). The client is
-    never trusted to supply the authoritative attendance time; any
+    ``event_timestamp`` is **server-generated** (``clock_timestamp()``). The
+    client is never trusted to supply the authoritative attendance time; any
     client-reported time belongs in ``verification_metadata`` as a signal, not
-    here.
+    here. See the column for why it is not ``now()``.
 
     ``latitude`` / ``longitude`` / ``gps_accuracy_meters`` are nullable: they
     record what the device reported, which may be unavailable.
@@ -93,7 +93,24 @@ class AttendanceEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     event_timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        # `clock_timestamp()`, NOT `now()`. `now()` is the *transaction start*
+        # time, which is wrong for this column in a way that corrupts state:
+        #
+        #   1. Two check-ins race. Transaction B begins, then A begins, takes the
+        #      user row lock and inserts a CHECK_IN stamped at A's start time.
+        #   2. B was blocked on the lock the whole time. It wakes, correctly sees
+        #      the CHECK_IN, and inserts a legitimate CHECK_OUT - stamped at *B's*
+        #      start time, which is earlier than A's.
+        #   3. Ordering by event_timestamp now reports CHECK_OUT before CHECK_IN,
+        #      so the derived state is CHECKED_IN for a user who has checked out.
+        #
+        # The Phase 4 row lock serialises the *decision*; it cannot serialise a
+        # timestamp that was fixed before the lock was taken. `clock_timestamp()`
+        # reads the wall clock at insertion, so stored order always matches commit
+        # order. It also makes the value distinct per statement, which `now()` is
+        # not - two events written in one transaction shared a timestamp, leaving
+        # the "latest event" query to break the tie arbitrarily.
+        server_default=text("clock_timestamp()"),
     )
     latitude: Mapped[float | None] = mapped_column(Double, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Double, nullable=True)

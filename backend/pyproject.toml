@@ -11,8 +11,23 @@ readme = "README.md"
 # also be developed on 3.11 toolchains. No 3.12-only syntax is used.
 requires-python = ">=3.11"
 
+# Nine direct dependencies, and Phase 7 added none. Structured logging, rate
+# limiting, correlation ids, security headers and request size limits are all
+# stdlib plus what FastAPI already brings: each has a popular third-party package,
+# and each package would have been more code to audit than the feature it provides.
+#
+# Ranges here, exact pins in constraints.txt. Ranges are right for a library;
+# a deployment needs reproducibility, so the Dockerfile installs with
+# `--constraint constraints.txt`. Local development deliberately does not, so a
+# broken upstream release is discovered here rather than in production.
 dependencies = [
     "fastapi>=0.115",
+    # [standard] adds the C HTTP parser (httptools), which is worth having. It also
+    # pulls websockets and watchfiles, which Karya does not use in production -
+    # watchfiles powers --reload, and there is no WebSocket endpoint. Dropping to
+    # plain `uvicorn` plus `httptools` would trim two packages from the runtime
+    # image; not done because it also removes --reload from a fresh dev install,
+    # and two unused pure-Python packages are a small price for that.
     "uvicorn[standard]>=0.34",
     "sqlalchemy>=2.0.36",
     "psycopg[binary]>=3.2",
@@ -26,10 +41,12 @@ dependencies = [
     "pyjwt>=2.10",        # JWT access tokens (HS256)
 ]
 
+# Development-only, and kept that way: `pip install .` (what the Dockerfile does)
+# installs none of these, so no test dependency reaches a production image.
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
-    "httpx>=0.28",
+    "httpx>=0.28",  # required by fastapi.testclient
 ]
 
 [tool.hatch.build.targets.wheel]

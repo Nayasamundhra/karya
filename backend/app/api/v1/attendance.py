@@ -20,6 +20,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.limits import ATTENDANCE_RATE_LIMIT, RATE_LIMITED_RESPONSE
 from app.models.user import User, UserRole
 from app.schemas.attendance import (
     AttendanceActionRequest,
@@ -77,7 +78,11 @@ def _record(
     "/check-in",
     response_model=AttendanceActionResponse,
     summary="Check in, after verifying presence",
-    responses={401: {"description": "Not authenticated"}},
+    # Per user, and set so it cannot obstruct a real person: someone checks in a
+    # couple of times a day, and even a client retrying a failed scan stays well
+    # inside the budget. What it stops is a loop.
+    dependencies=[ATTENDANCE_RATE_LIMIT],
+    responses={401: {"description": "Not authenticated"}, **RATE_LIMITED_RESPONSE},
 )
 def check_in(
     payload: AttendanceActionRequest,
@@ -99,7 +104,8 @@ def check_in(
     "/check-out",
     response_model=AttendanceActionResponse,
     summary="Check out, after verifying presence",
-    responses={401: {"description": "Not authenticated"}},
+    dependencies=[ATTENDANCE_RATE_LIMIT],
+    responses={401: {"description": "Not authenticated"}, **RATE_LIMITED_RESPONSE},
 )
 def check_out(
     payload: AttendanceActionRequest,

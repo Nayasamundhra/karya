@@ -24,7 +24,8 @@ and, in future, additional signals (Wi-Fi, device integrity, risk scoring).
 | **4** | Attendance check-in / check-out | ✅ Complete |
 | **5** | Attendance history, daily summary, tenant dashboard APIs | ✅ Complete |
 | **6** | User, tenant and account management | ✅ Complete |
-| 7 | Reporting, analytics, admin corrections | Not started |
+| **7** | Production hardening & API readiness | ✅ Complete |
+| 8 | Frontend / PWA architecture | Not started |
 
 Phase 2 adds the identity and authorization layer every later feature depends
 on: Argon2id password hashing, JWT access tokens, revocable refresh tokens with
@@ -49,6 +50,14 @@ creation, profile and role management, activate/deactivate, self-service passwor
 change, and a tenant profile. **No new tables and no migration** — the existing
 `users`, `tenants` and `audit_logs` tables already carried everything needed.
 
+Phase 7 hardens all of it for production without changing any business
+behaviour: configuration that fails fast, security headers, CORS verification,
+rate limiting, request size limits, structured logging with correlation ids,
+liveness/readiness probes, connection-pool and timeout management, graceful
+shutdown, a production container image, and error responses that cannot leak
+internals. It adds **no table**, and one migration that changes a single column
+*default* — see [§8f](#8f-production-hardening-phase-7).
+
 See [§10 — Not implemented yet](#10-what-is-intentionally-not-implemented-yet).
 
 ## 3. Technology stack
@@ -59,16 +68,26 @@ See [§10 — Not implemented yet](#10-what-is-intentionally-not-implemented-yet
 | Web framework   | FastAPI                                   |
 | ORM             | SQLAlchemy 2.x (typed declarative models)  |
 | Driver          | psycopg 3 (`postgresql+psycopg`)          |
-| Database        | PostgreSQL 16                             |
+| Database        | PostgreSQL 18 (13+ supported)              |
 | Migrations      | Alembic                                   |
 | Validation      | Pydantic v2 / pydantic-settings           |
 | Password hashing| Argon2id (`argon2-cffi`)                  |
 | Access tokens   | JWT HS256 (`PyJWT`)                       |
-| Containers      | Docker Compose                            |
+| Containers      | Docker (multi-stage, non-root) + Compose   |
+| Logging         | stdlib `logging` + a JSON formatter        |
 | Tests           | pytest (against real PostgreSQL)          |
 
-Database access is **synchronous**. Phase 1 has no request path that touches
-the database, and a sync engine keeps Alembic and the test fixtures simple.
+Database access is **synchronous**. A sync engine keeps Alembic and the test
+fixtures simple, and Karya's endpoints are short transactional units rather than
+long I/O fan-outs, so the concurrency an async driver buys would mostly be spent
+waiting on the same connection pool. Starlette runs each `def` endpoint in a
+worker thread, so the server stays concurrent regardless.
+
+**No dependency was added in Phase 7.** Structured logging, rate limiting, the
+correlation id, the security headers and the size limits are all stdlib plus what
+FastAPI already brings - which is deliberate: each of those has a popular
+third-party package, and each package would have been more code to audit than the
+feature it provides.
 
 ## 4. How to start PostgreSQL
 
@@ -84,10 +103,28 @@ docker compose up -d
 docker compose ps          # wait for "healthy"
 ```
 
-The compose file provisions PostgreSQL 18 only, with a named persistent volume
-(`karya-postgres-data`), a `pg_isready` health check, and configurable
-credentials, database name and host port. **Redis is deliberately not
-included** — it arrives with QR challenges, sessions and rate limiting.
+`docker compose up -d` provisions **PostgreSQL only**, with a named persistent
+volume (`karya-postgres-data`), a `pg_isready` health check, and configurable
+credentials, database name and host port. That is what local development wants: the
+application runs on the host with `--reload`.
+
+To run the **production image** against it — non-root user, health check, signal
+handling, pinned dependencies — start the API service, which is behind a profile so
+the command above is unchanged:
+
+```bash
+docker compose --profile api up -d --build
+docker compose --profile api run --rm api alembic upgrade head   # migrations are a
+                                                                 # deploy step
+curl http://127.0.0.1:8000/ready
+```
+
+**Redis is deliberately not included.** Phase 7's rate limiter is in-process, which
+is honest about its limits (see [§8f](#8f-production-hardening-phase-7)); Redis
+arrives when a shared limiter or session store actually needs it.
+
+Compose is **not** production orchestration — no rolling deploys, replicas, secret
+store or scheduling. See [`docs/PRODUCTION.md`](docs/PRODUCTION.md).
 
 To stop, keeping data: `docker compose down`.
 To stop and destroy data: `docker compose down -v`.
@@ -136,6 +173,19 @@ cp .env.example .env            # PowerShell: Copy-Item .env.example .env
 | `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins; wildcard rejected  |
 | `MAX_GPS_ACCURACY_METERS` | Worst accepted GPS accuracy. Default `100`     |
 | `QR_CHALLENGE_TTL_SECONDS` | QR challenge lifetime. Default `30`          |
+| `DOCS_ENABLED`      | Serve `/docs`, `/redoc`, `/openapi.json`. Default `true` |
+| `LOG_LEVEL` / `LOG_FORMAT` | Default `INFO` / `json` (or `console`)      |
+| `DB_POOL_SIZE`, `DB_MAX_OVERFLOW` | Pool bounds. Default `5` / `10`      |
+| `DB_POOL_TIMEOUT_SECONDS`, `DB_POOL_RECYCLE_SECONDS` | Default `30` / `1800` |
+| `DB_CONNECT_TIMEOUT_SECONDS` | Default `10`                              |
+| `DB_STATEMENT_TIMEOUT_MS`, `DB_LOCK_TIMEOUT_MS` | Server-side ceilings. Default `15000` / `5000`; `0` disables |
+| `MAX_REQUEST_BODY_BYTES`, `MAX_QUERY_STRING_BYTES` | Default `65536` / `2048` |
+| `HSTS_ENABLED`, `HSTS_MAX_AGE_SECONDS` | Unset ⇒ on in production only    |
+| `RATE_LIMIT_ENABLED` and the eight `RATE_LIMIT_*` budgets | See `.env.example` |
+
+The full annotated list — including which values production refuses to start
+without — is in [`.env.example`](.env.example) and
+[`docs/PRODUCTION.md`](docs/PRODUCTION.md).
 
 Generate a secret with:
 
@@ -148,6 +198,15 @@ missing and `ENVIRONMENT` is anything other than `local`/`test`, the application
 refuses to start. In `local`/`test` it still starts — so `GET /health` and the
 database tooling work on a fresh checkout — but any attempt to mint or verify a
 token raises instead of signing with a guessable default.
+
+`ENVIRONMENT` is a **closed set** (`local`, `test`, `staging`, `production`), not
+a free string, so `prod` or a stray trailing space fails at startup instead of
+silently landing in the permissive branch of a later `if`. With
+`ENVIRONMENT=production` the application additionally refuses to start when
+`DEBUG` is on, when the JWT secret or database password is still one of the
+placeholders published in `.env.example`, or when any CORS origin is not
+`https://` — because the values that are *convenient* locally are exactly the ones
+that must never reach production.
 
 The same `.env` drives both Docker Compose and the application, so the two can
 never drift. `app/core/config.py` builds the SQLAlchemy URL from the discrete
@@ -180,11 +239,19 @@ uvicorn app.main:app --reload
 Then:
 
 ```bash
-curl http://127.0.0.1:8000/health
-# {"status":"ok"}
+curl http://127.0.0.1:8000/health   # {"status":"ok"}   liveness  — never queries the DB
+curl http://127.0.0.1:8000/ready    # {"status":"ready"} readiness — SELECT 1
 ```
 
 Interactive docs: <http://127.0.0.1:8000/docs>.
+
+Every response carries an `X-Request-ID` header and the same id appears on every
+log line the request produced, so a reported problem can be looked up directly.
+
+For a production-shaped run, see
+[`docs/PRODUCTION.md` §5](docs/PRODUCTION.md) — the flags are not optional
+decoration: `--proxy-headers --forwarded-allow-ips=<proxy>` is what makes the
+per-address rate limits see the real client rather than the load balancer.
 
 ## 8. How to run tests
 
@@ -229,13 +296,33 @@ Coverage by area:
 | `test_users_self.py` | Own profile, password change, self-escalation attempts |
 | `test_users_security.py` | RBAC matrix, cross-tenant 404s, field smuggling, attendance preservation |
 | `test_users_concurrency.py` | Last-admin invariant and duplicate-email race, forced interleaving |
+| `test_config_production.py` | Environment enum, production fail-fast, operational limits |
+| `test_security_headers.py` | Every header, on success/error/413, docs CSP exception, HSTS |
+| `test_cors.py` | Allowed, disallowed and near-miss origins; preflight; wildcard refusal |
+| `test_rate_limit.py` | The limiter (windows, `Retry-After`, capacity, thread safety), the wired endpoints, and a full working day that must never be throttled |
+| `test_observability.py` | Request-id generation/validation, access-log fields, redaction, no secret in any log |
+| `test_error_handling.py` | Validation errors that do not echo input, generic 500s, no traceback or SQL leakage |
+| `test_request_limits.py` | Body and query caps, chunked-body evasion, existing bounds intact |
+| `test_db_session.py` | Pool configuration, server-side timeouts, rollback-on-exception, disposal |
+| `test_health.py` | Liveness independence from the database, readiness 200/503, read-only |
+
+`test_health.py` proves liveness never queries the database by making any database
+access raise, so the property fails loudly if `/health` ever grows a query.
 
 The two `*_concurrency.py` modules are the only ones that commit to the database
 (real concurrency needs separate connections); each deletes its own rows in
 teardown. Both also contain a deliberately naive implementation and assert it
 *would* break — double-consuming a QR, or double-inserting a CHECK_IN — so if the
 harness ever stops creating real lock contention those tests fail rather than the
-suite quietly passing.
+suite quietly passing. Phase 7 added a third pair in the same style, for event
+*ordering* rather than event count: see
+[§8f](#8f-production-hardening-phase-7).
+
+Rate limiting stays **enabled** throughout the suite rather than being switched
+off, because a limiter that blocks a legitimate flow is exactly the regression the
+suite should catch — and it cannot catch it while disabled. An autouse fixture
+clears the counters between tests, so each test behaves like a freshly started
+process.
 
 ## 8a. Authentication architecture (Phase 2)
 
@@ -265,6 +352,8 @@ Authorized Operation        require_roles(...) + tenant_scoped_select(...)
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
+| `GET` | `/health` | — | Liveness; never touches the database (Phase 1) |
+| `GET` | `/ready` | — | Readiness; `SELECT 1`, 200 or 503 (Phase 7) |
 | `POST` | `/api/v1/auth/login` | — | Tenant-scoped login → token pair |
 | `POST` | `/api/v1/auth/refresh` | refresh token in body | Rotate → new token pair |
 | `POST` | `/api/v1/auth/logout` | refresh token in body | Revoke that session (204) |
@@ -1223,6 +1312,312 @@ and to that user, so it is not a window onto the tenant's whole audit log.
 - **Users cannot change their own email**; it is the login identity, and it
   belongs to tenant administration.
 
+## 8f. Production hardening (Phase 7)
+
+Phases 1–6 built the product. Phase 7 makes it safe to run, and **changes no
+business behaviour**: no endpoint URL moved, no response shape changed, no rule
+about attendance, presence, roles or tenancy was altered. The full-suite count went
+from 443 to 659 tests, with no existing test rewritten except where Phase 7 fixed a
+real defect (two, described below).
+
+### The request pipeline
+
+```
+                    ┌────────────────────────────────────────────┐
+  client  ───────►  │ SecurityHeadersMiddleware                  │  outermost
+                    │  nosniff · Referrer-Policy · CSP           │
+                    │  X-Frame-Options · Cache-Control · HSTS    │
+                    ├────────────────────────────────────────────┤
+                    │ RequestContextMiddleware                   │
+                    │  X-Request-ID in/out · access log          │
+                    │  last-resort 500                           │
+                    ├────────────────────────────────────────────┤
+                    │ CORSMiddleware (only if origins configured)│
+                    ├────────────────────────────────────────────┤
+                    │ RequestLimitsMiddleware                    │
+                    │  body <= 64 KiB · query <= 2 KiB           │
+                    ├────────────────────────────────────────────┤
+                    │ rate-limit dependency -> auth -> schema    │
+                    │ -> route -> service -> PostgreSQL          │  innermost
+                    └────────────────────────────────────────────┘
+```
+
+The order is load-bearing, not incidental:
+
+- **Security headers outermost**, so *every* response carries them — including the
+  413 the size limiter generates and the 500 the context middleware generates. One
+  layer lower would miss both.
+- **Correlation id outside CORS**, so a rejected preflight is still logged and still
+  traceable.
+- **CORS outside the size limits**, so a 413 still carries CORS headers and a
+  browser reports the real status instead of an opaque CORS failure.
+- **Size limits still ahead of routing**, so an oversized body is refused before it
+  is buffered or JSON-decoded.
+
+All four are plain ASGI middleware rather than `BaseHTTPMiddleware`, which runs the
+downstream app in a separate task connected by a queue — an extra task switch per
+request, plus known trouble with streaming and background tasks, for behaviour these
+do not need.
+
+### Two real defects this phase found and fixed
+
+**1. The 422 body echoed the submitted password.** FastAPI's default validation
+handler includes Pydantic's `input` field, which is the offending value:
+
+```
+POST /api/v1/auth/login   {"password": "hunter2", ...}
+-> 422 {"detail":[{"type":"too_short", ..., "input":"hunter2"}]}
+```
+
+That is a credential in a response body, and from there in browser consoles,
+client-side error reporting, and any proxy that logs bodies. `app/api/errors.py` now
+builds the response from an **allowlist** of `{type, loc, msg}`, so a future Pydantic
+error field cannot leak by default either. The client still learns exactly what to
+fix: `loc` names the field and `msg` states the rule.
+
+**2. A check-out could be stamped before the check-in it followed.**
+`attendance_events.event_timestamp` defaulted to `now()`, which in PostgreSQL is the
+**transaction start** time, not the moment of insertion. Under lock contention:
+
+```
+t=0.00  transaction B begins                    (B's now() is fixed here)
+t=0.50  transaction A begins, locks the user row,
+        inserts CHECK_IN stamped 0.50, commits
+t=0.51  B finally gets the lock, correctly sees CHECKED_IN,
+        inserts a valid CHECK_OUT — stamped 0.00
+```
+
+Ordering by `event_timestamp` then reports `[CHECK_OUT, CHECK_IN]`, so the derived
+state is `CHECKED_IN` for someone who has checked out: they show as present on the
+team dashboard and the day's sessions mis-pair. Reproduced against PostgreSQL 18.4
+with a 0.536 s inversion before the fix.
+
+The Phase 4 row lock serialises the *decision* correctly; it cannot serialise a
+timestamp that was fixed before the lock was taken. Migration `127b35de9c9f` changes
+the default to **`clock_timestamp()`**, which reads the wall clock at insertion, so
+stored order always matches commit order. That is the phase's only migration, it
+touches one column default, and it is reversible.
+
+It also removed a second symptom: `now()` is constant *within* a transaction, so two
+events written in one transaction shared a timestamp and the "latest event" query
+broke the tie arbitrarily — differently depending on whether the planner chose a
+sequential or an index scan, which is why this surfaced as an order-dependent test
+failure rather than a consistent one.
+
+`test_attendance_concurrency.py` now carries the regression test **and** its guard, in
+the house style: a companion test stamps events with `now()` explicitly under the
+identical interleaving and asserts the pair *does* invert, so the guarantee cannot
+quietly become untested.
+
+### Configuration
+
+`ENVIRONMENT` is a closed set — `local`, `test`, `staging`, `production` — so a typo
+like `prod` fails at startup rather than behaving like development. Production
+additionally refuses to boot on a development-shaped configuration: `DEBUG=true`, a
+placeholder secret or database password, or a non-`https://` CORS origin. Every
+operational limit (pool sizes, timeouts, body caps, rate budgets) is validated in
+every environment, because a zero in any of them silently disables a protection.
+
+### Security headers
+
+| Header | Why |
+| --- | --- |
+| `X-Content-Type-Options: nosniff` | A JSON body containing attacker-influenced text must never be sniffed as HTML and executed |
+| `Referrer-Policy: no-referrer` | Karya URLs contain user and tenant UUIDs, which a `Referer` would leak to the next site visited |
+| `X-Frame-Options: DENY` + `frame-ancestors 'none'` | `/docs` is a real HTML page and a clickjacking surface; both are sent because one is the modern control and one is what older browsers honour |
+| `Content-Security-Policy` | Makes "this response is data" browser-enforced: `default-src 'none'` |
+| `Cache-Control: no-store` | Every response is authenticated data or an error; neither belongs in a shared cache or on a laptop disk |
+| `Strict-Transport-Security` | Production only. Meaningless without HTTPS, and actively harmful on `localhost`, where it would pin the whole browser profile to a scheme that host cannot serve |
+
+Deliberately **not** set: `X-XSS-Protection` (removed from every current browser, and
+it introduced vulnerabilities of its own), the `Cross-Origin-*` isolation headers
+(they govern document contexts, which an API has none of), and `Permissions-Policy`
+(it constrains browser features a JSON response cannot use).
+
+`/docs` and `/redoc` get a **separate, looser CSP** — Swagger UI loads its script from
+a CDN and applies inline styles, so the strict policy would render a blank page. It is
+scoped to exactly those paths, and `script-src` still names its origins, so an
+injected inline script is still refused. `DOCS_ENABLED=false` turns the docs page and
+the schema off together, since they are one decision.
+
+### Rate limiting, and what it honestly protects
+
+An in-memory fixed-window counter, per process. Stated plainly, because it decides
+what the thing is worth:
+
+- ✅ Stops one client brute-forcing or flooding **one instance**, and stops a mobile
+  client stuck in a retry loop.
+- ❌ **Not** shared across instances — with N replicas an attacker effectively gets N
+  times the budget. Counters are also lost on restart, and a fixed window admits up
+  to twice the limit across a boundary.
+
+So a multi-instance deployment needs an edge limiter as well. The seam for replacing
+it is deliberate: routes only ever declare *which* limit applies
+(`dependencies=[LOGIN_RATE_LIMIT]`), and the three-method `RateLimiter` protocol
+(`consume`, `peek`, `clear`) was chosen to map onto Redis `INCR`+`EXPIRE`, `GET` and
+`DEL`. A Redis backend is a second class plus one line in `get_rate_limiter()` — no
+route, schema or handler change.
+
+Login gets **two** limits, because they bound different things. Per address (20/min)
+bounds request volume; per `(tenant, email)` (10 failures / 15 min) bounds *guessing*,
+which addresses are too cheap to bound. Only failures count and a success clears the
+counter, so mistyping a password twice leaves no trace. The identifier is stored as a
+SHA-256 digest, never the address itself, so the limiter's keyspace is not a list of
+who has been trying to log in.
+
+| Endpoint | Key | Budget |
+| --- | --- | --- |
+| `POST /auth/login` | client address | 20 / min |
+| `POST /auth/login` (failures only) | `(tenant, email)` digest | 10 / 15 min |
+| `POST /auth/refresh`, `POST /auth/logout` | client address | 60 / min |
+| `POST /users/me/password` | user | 5 / 15 min |
+| `POST /presence/qr/challenge` | user | 60 / min |
+| `POST /presence/verify` | user | 30 / min |
+| `POST /attendance/check-in`, `/check-out` | user | 20 / min |
+| Tenant-admin mutations, `PATCH /tenant/me` | user | 120 / min |
+
+Budgets are set so a real person never meets one: someone checks in twice a day
+against 20/min, and the office QR display refreshes about twice a minute against
+60/min. A test walks a full working day — login, presence check, check in, out for
+lunch, back in, out for the day, each with its own fresh QR, plus ten dashboard
+reads — and asserts nothing is throttled.
+
+Read endpoints are **not** limited. They are already bounded by pagination and range
+caps, and throttling a dashboard a manager refreshes would be user-visible for no
+security gain.
+
+A 429 carries `Retry-After` and a body of exactly `{"detail": "Too many requests"}` —
+no remaining count and no rule name, which would tell a script how to pace itself.
+Throttling is byte-identical for accounts that exist and accounts that do not, so the
+Phase 2 anti-enumeration property holds for 429 as well as for 401.
+
+### Error handling
+
+Every error is still `{"detail": ...}` — unchanged from Phases 1–6, which several
+existing tests assert byte-for-byte. The correlation id therefore lives in the
+`X-Request-ID` **header**, not in the body: that keeps the envelope identical for two
+callers hitting the same error, so a cross-tenant 404 stays indistinguishable from a
+fictional one.
+
+An unhandled exception returns `500 {"detail": "Internal server error"}` and the
+traceback goes only to the log. It is caught in the correlation middleware rather than
+by a handler on Starlette's `ServerErrorMiddleware`, which sits *outside* every
+application middleware — a response produced there would carry no correlation id, no
+security headers and no access-log line, which is precisely the case an operator most
+needs to trace. A `SQLAlchemyError` is likewise a generic 500: its string form can
+carry the statement, the table and constraint names, and for some drivers the bound
+parameters.
+
+### Structured logging
+
+One JSON object per line on stderr (`LOG_FORMAT=console` for a terminal). Every record
+inside a request carries `request_id`; the access line adds `method`, `path`, `route`,
+`status_code`, `duration_ms`, `client_ip` and — once authentication has resolved —
+`user_id` and `tenant_id`.
+
+- **`route`, not just `path`.** The template (`/attendance/users/{user_id}`) is what
+  makes "how slow is this endpoint" answerable; the expanded path alone would put a
+  distinct value on every line.
+- **The query string is never logged.** `?search=<someone's name>` is user input, and
+  a log line may be retained for months.
+- **Never logged at all:** passwords, password hashes, access tokens, refresh tokens,
+  QR nonces, `Authorization` headers, request bodies. A failed login records the
+  *tenant slug* — public, and what an operator correlates by — and not the email,
+  because a log of attempted addresses is a list of accounts worth attacking.
+- **Key-based redaction as a net**, not as the plan: any field whose name suggests a
+  credential is replaced before serialisation, so one careless `extra=` in a future
+  phase cannot leak.
+- 4xx logs at WARNING and 5xx at ERROR, so an alert on ERROR fires for defects and not
+  for a mistyped password.
+
+An inbound `X-Request-ID` is honoured only if it matches `[A-Za-z0-9._-]{1,64}`;
+anything else is replaced with a generated id rather than failing the request. Without
+that check a caller could embed newlines and forge whole log entries.
+
+`alembic/env.py` gained `disable_existing_loggers=False`, which is load-bearing rather
+than tidy: `fileConfig` defaults to `True` and would disable every logger that already
+existed — including all of Karya's — in any process that runs Alembic in-process. The
+test suite does exactly that, which is how this was found.
+
+### Liveness and readiness
+
+| Endpoint | Checks | For |
+| --- | --- | --- |
+| `GET /health` | nothing external; always 200 while the process runs | **liveness** — restarts |
+| `GET /ready` | `SELECT 1` against PostgreSQL; 200 or 503 | **readiness** — load-balancer rotation |
+
+The split is the point. An orchestrator *kills* what fails liveness, so if liveness
+touched PostgreSQL a database blip would restart every healthy API process — turning a
+recoverable dependency failure into an outage, with a restart storm on top, exactly
+when the database can least afford it. Readiness merely removes an instance from
+rotation. Both are unauthenticated and return a fixed one-word payload: no version,
+hostname, driver, timing or error detail.
+
+They sit **outside** `/api/v1`, because they describe the process rather than the API
+contract, so a future `/api/v2` must not move them.
+
+### Database connections
+
+`DB_POOL_SIZE` (5) + `DB_MAX_OVERFLOW` (10) per process, with `pool_pre_ping` and a
+30-minute recycle — both defending against the same failure, a connection that looks
+open and is not. `docs/PRODUCTION.md` works through sizing against PostgreSQL's
+`max_connections`; the short version is that a bigger pool does not make a saturated
+database faster, it just moves the queue somewhere less visible.
+
+Two server-side ceilings are applied per connection: `statement_timeout` (15 s) bounds
+a runaway query, and `lock_timeout` (5 s) bounds the `FOR UPDATE` waits the attendance
+and last-admin paths rely on. The expected wait there is milliseconds, so 5 s only
+fires when a transaction is genuinely stuck — and then it fails one request instead of
+holding a pool slot until the pool is exhausted and *every* request fails.
+
+`hide_parameters=True` is a requirement rather than a preference: a `users` INSERT
+binds `password_hash` as a parameter, and SQLAlchemy renders bound parameters into
+exception messages, which reach log files.
+
+`get_db` now rolls back explicitly on exception. `close()` happens to roll back too,
+but explicitness matters here — a request that raises mid-transaction must not return
+its connection to the pool with uncommitted work for the next request to inherit.
+
+### Graceful shutdown
+
+Four lines, because there is nothing else to stop: Karya runs no background tasks,
+timers or workers. Uvicorn stops accepting connections and drains in-flight requests
+within `--timeout-graceful-shutdown`, then the lifespan handler disposes the
+connection pool. Startup deliberately does **not** touch the database — a container
+that refuses to start cannot report anything, whereas one that starts and reports
+itself unready can.
+
+### Container
+
+Multi-stage `python:3.12-slim-bookworm`: the runtime stage carries no compiler, no pip
+cache and no build metadata. It runs as a non-root user (uid 10001) that only *reads*
+its own code, so a compromised process cannot rewrite its source. Dependencies come
+from `constraints.txt`, a pinned closure produced by resolving the runtime
+dependencies in a clean virtualenv — `pyproject.toml`'s ranges are right for a library
+and wrong for a deployment.
+
+The `HEALTHCHECK` hits liveness, not readiness, for the reason above. The `CMD` is
+exec-form so uvicorn is PID 1 and receives `SIGTERM` directly, and it deliberately
+**omits** `--proxy-headers` / `--forwarded-allow-ips`: those make uvicorn rewrite the
+client address from `X-Forwarded-For`, which the per-address rate limits key on, so
+trusting that header from any peer would let any client spoof its address. A deployment
+behind a load balancer must add both, naming the balancer.
+
+Compose still starts PostgreSQL and nothing else; the API is behind a profile
+(`docker compose --profile api up -d --build`), so the existing development workflow is
+untouched. Compose is not production orchestration and does not pretend to be.
+
+### Frontend readiness (for Phase 8)
+
+Reviewed from a consumer's perspective, with no endpoint redesigned for aesthetics.
+What a client can rely on: every error is `{"detail": ...}`; validation failures are
+422 with `{type, loc, msg}` and never echo the submitted value; a 429 carries
+`Retry-After`; every response carries `X-Request-ID`, exposed through CORS so a browser
+can read it and report it; business refusals stay **200** with `success: false` /
+`verified: false` plus a machine-readable `reason`; no identity field is ever accepted
+from the client; and `/openapi.json` documents authentication, roles, statuses and
+pagination across all 24 paths.
+
 ## 9. Current database entities
 
 Seven tables — the six Phase 1 entities plus one for Phase 2:
@@ -1294,11 +1689,24 @@ runtime as well as in the schema — see
 
 ## 10. What is intentionally NOT implemented yet
 
-**Deferred to Phase 7 (reporting & administration):** attendance reports ·
+**Delivered in Phase 7:** rate limiting (in-process; see §8f for what that does
+and does not protect), security headers, CORS verification, request size limits,
+structured logging, correlation ids, readiness probe, pool and timeout management,
+graceful shutdown, a production container image, and production configuration
+fail-fast.
+
+**Still not implemented, and now scheduled after the frontend:** attendance reports ·
 CSV / Excel / PDF export · hours, overtime, late-arrival and absence analytics ·
 overnight-shift rules · leave, holidays and weekends · admin check-in/out,
 correction, approval or deletion · per-tenant timezones · password reset by email ·
-email invitations · rate limiting (a deployment requirement, see §8e).
+email invitations.
+
+**Explicitly out of scope for Phase 7, and documented rather than half-built:** a
+distributed (Redis) rate limiter · a `/metrics` endpoint, Prometheus exposition or
+tracing · automated database backups and point-in-time recovery · Kubernetes / ECS
+manifests · a `refresh_tokens` cleanup sweeper · supply-chain hash pinning. Each is
+stated with its consequences in
+[`docs/PRODUCTION.md`](docs/PRODUCTION.md) — §12 lists every known residual risk.
 
 **Deliberately not implemented in Phase 3:** Wi-Fi verification (specified as
 optional) · device fingerprinting / attestation · face recognition · the office
@@ -1312,24 +1720,96 @@ notifications · React frontend · PWA · admin & staff dashboards · reports ·
 analytics · multiple attendance locations per tenant · payroll · leave
 management · shift management · Redis · background workers.
 
-Also deliberately absent: any endpoint that changes a user's role (so
-self-escalation has no surface), and any access-token blacklist (access tokens
-are short-lived; revocation lives at the refresh-token layer). The
-`app/security/` and `app/middleware/` packages are still not needed — password
-and token logic lives under `app/services/auth/`, and the only middleware so far
-is CORS, configured in `main.py`.
+Also deliberately absent: any access-token blacklist. Access tokens are
+short-lived by design and the database is re-read on every request, so a
+deactivation or role change takes effect on the *next* call; revocation lives at the
+refresh-token layer. `app/security/` is still not needed — password and token logic
+lives under `app/services/auth/`. `app/middleware/` now exists, because Phase 7
+genuinely needed it (see §8f).
+
+## 11. Operations
+
+The full operational reference is [`docs/PRODUCTION.md`](docs/PRODUCTION.md). The
+short version:
+
+### Health and readiness
+
+```bash
+curl -fsS http://host:8000/health   # liveness  — restart on failure
+curl -fsS http://host:8000/ready    # readiness — remove from rotation on failure
+```
+
+Point liveness at `/health` and readiness at `/ready`, never the reverse: `/health`
+never queries the database precisely so that a database blip cannot make an
+orchestrator restart every healthy process.
+
+### Production configuration
+
+Set `ENVIRONMENT=production` and the application enforces the rest — it refuses to
+start without a real `JWT_SECRET_KEY`, with `DEBUG=true`, with a placeholder
+database password, or with a non-`https://` CORS origin. `.env.example` annotates
+every variable; `docs/PRODUCTION.md` §2 lists the required ones.
+
+### Security considerations
+
+- **HTTPS is mandatory** — bearer tokens on every request, passwords on two
+  endpoints.
+- Behind a load balancer, run uvicorn with
+  `--proxy-headers --forwarded-allow-ips=<proxy address>`. Omit it and every client
+  shares one rate-limit budget; use a wildcard and any client can spoof its address.
+  Name the proxy.
+- The in-process rate limiter is **per process**. A multi-instance deployment needs
+  an edge limiter too.
+- Never ship `.env`; use the platform's secret store. Nothing sensitive is baked
+  into the image.
+- Set a retention period for access logs — they carry `client_ip`, `user_id` and
+  `tenant_id`.
+
+### Deployment prerequisites
+
+PostgreSQL 13+ (18 recommended) with automated backups · a TLS-terminating proxy ·
+a secret store · log aggregation · `alembic upgrade head` as a one-off step **before**
+the new version serves traffic. The checklist is `docs/PRODUCTION.md` §11.
+
+### Backup and recovery
+
+**Not implemented by Karya, and required before production.** Attendance events are
+the source of truth and are immutable, so losing them cannot be repaired by
+recomputation. Minimum: nightly `pg_dump --format=custom`, off-host, encrypted,
+with tiered retention. Preferred: continuous WAL archiving for point-in-time
+recovery, because the realistic disaster is an accidental bulk change rather than a
+disk failure. **Test the restore on a schedule** — an untested backup is a
+hypothesis. Details and the verification steps are in `docs/PRODUCTION.md` §9.
+
+### Monitoring
+
+Structured JSON logs on stderr are the interface; there is no `/metrics` endpoint
+and no tracing yet. Alert on `event=unhandled_exception` and on 5xx (both should be
+zero), watch `duration_ms` percentiles grouped by `route`, and watch the rates of
+`login_failed`, `login_throttled` and `rate_limited`.
 
 ## Project layout
 
 ```
 backend/
 ├── app/
-│   ├── main.py                  # FastAPI app, CORS, router mount, GET /health
-│   ├── core/config.py           # env-driven settings, SecretStr credentials
+│   ├── main.py                  # create_app(): middleware order, routers, lifespan
+│   ├── core/
+│   │   ├── config.py            # env-driven settings, SecretStr, production fail-fast
+│   │   ├── context.py           # request-scoped contextvars + logging filter
+│   │   ├── logging.py           # JSON/console formatters, key-based redaction
+│   │   └── rate_limit.py        # RateLimiter protocol + in-memory fixed window
+│   ├── middleware/
+│   │   ├── security_headers.py  # hardening headers; docs CSP exception
+│   │   ├── request_context.py   # correlation id, access log, last-resort 500
+│   │   └── request_limits.py    # body and query size caps
 │   ├── api/
 │   │   ├── deps.py              # get_current_user, tenant context, require_roles
+│   │   ├── errors.py            # exception handlers; 422 never echoes input
+│   │   ├── limits.py            # rate-limit dependencies (the only wiring routes see)
+│   │   ├── probes.py            # GET /health, GET /ready
 │   │   └── v1/
-│   │       ├── router.py        # aggregates v1 routers
+│   │       ├── router.py        # aggregates v1 routers; owns API_V1_PREFIX
 │   │       ├── auth.py          # login / refresh / logout / me
 │   │       ├── presence.py      # qr/challenge / verify
 │   │       ├── attendance.py    # check-in / check-out / reads
@@ -1359,10 +1839,14 @@ backend/
 │       └── users/
 │           ├── errors.py        # domain errors, mapped to codes by the API
 │           └── service.py       # lifecycle, roles, password, last-admin lock
-├── alembic/                     # env.py, script.py.mako, versions/
-├── tests/                       # conftest + model/schema/auth/rbac/tenant tests
+├── alembic/                     # env.py, script.py.mako, versions/ (4 revisions)
+├── tests/                       # conftest + 24 test modules
+├── docs/PRODUCTION.md           # deployment, secrets, backups, residual risks
 ├── alembic.ini
-├── docker-compose.yml
+├── Dockerfile                   # multi-stage, non-root, healthcheck
+├── .dockerignore
+├── constraints.txt              # pinned runtime closure for reproducible builds
+├── docker-compose.yml           # postgres always; api behind the "api" profile
 ├── pyproject.toml
 └── .env.example
 ```

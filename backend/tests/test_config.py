@@ -9,10 +9,24 @@ from app.core.config import MIN_JWT_SECRET_LENGTH, Settings
 
 GOOD_SECRET = "a-sufficiently-long-test-secret-key-1234"
 
+#: The minimum a production configuration must supply beyond a secret. Phase 7
+#: makes production refuse to start without a database password, so a test about
+#: *secret handling* has to satisfy that rule to reach the behaviour it is
+#: checking. See ``test_config_production.py`` for the rules themselves.
+PRODUCTION_BASE: dict[str, object] = {
+    "environment": "production",
+    "postgres_password": "a-real-production-password",
+}
+
 
 def build(**overrides: object) -> Settings:
     """Construct Settings without reading the developer's .env file."""
     return Settings(_env_file=None, **overrides)  # type: ignore[arg-type]
+
+
+def build_production(**overrides: object) -> Settings:
+    """Construct a production Settings that is valid apart from ``overrides``."""
+    return build(**{**PRODUCTION_BASE, **overrides})
 
 
 # ---------------------------------------------------------------------------
@@ -38,17 +52,15 @@ def test_missing_secret_refuses_to_start_outside_local() -> None:
 
 def test_short_secret_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        build(environment="production", jwt_secret_key="too-short")
+        build_production(jwt_secret_key="too-short")
 
     # Exactly at the boundary is acceptable.
-    config = build(
-        environment="production", jwt_secret_key="x" * MIN_JWT_SECRET_LENGTH
-    )
+    config = build_production(jwt_secret_key="x" * MIN_JWT_SECRET_LENGTH)
     assert len(config.jwt_secret) == MIN_JWT_SECRET_LENGTH
 
 
 def test_secret_is_never_rendered_in_plain_text() -> None:
-    config = build(environment="production", jwt_secret_key=GOOD_SECRET)
+    config = build_production(jwt_secret_key=GOOD_SECRET)
 
     assert GOOD_SECRET not in repr(config)
     assert GOOD_SECRET not in str(config)
