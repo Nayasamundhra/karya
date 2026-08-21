@@ -1,0 +1,2992 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Karya",
+    "summary": "Multi-tenant staff attendance and presence verification platform.",
+    "description": "\nMulti-tenant staff attendance with **server-verified presence**.\n\nEvery request is scoped to the authenticated user's own tenant. Identity, role,\ntenant, GPS validity, geofence distance, QR validity and the attendance timestamp\nare all determined by the server; no client-supplied value influences any of them.\n\n**Authentication.** `POST /api/v1/auth/login` returns a short-lived JWT access\ntoken and a long-lived, revocable refresh token. Send the access token as\n`Authorization: Bearer <token>`. Refresh tokens must be rotated - the presented\ntoken is revoked as part of a successful rotation, so replaying one fails.\n\n**Errors.** Every error response is `{\"detail\": ...}`. Validation failures return\n422 with a list of `{type, loc, msg}` under `detail`; the submitted value is never\nechoed back. Rate-limited requests return 429 with a `Retry-After` header. Every\nresponse, success or failure, carries an `X-Request-ID` header - quote it when\nreporting a problem.\n\n**Presence and attendance refusals are not HTTP errors.** A well-formed request\nrefused on its merits - outside the geofence, QR already used, already checked in -\nreturns **200** with `verified: false` or `success: false` and a machine-readable\n`reason`. 4xx is reserved for requests that could not be processed at all.\n\n**Nothing is ever deleted.** There is no `DELETE` method anywhere in this API.\nUsers move between `ACTIVE` and `INACTIVE`; attendance events are immutable.\n",
+    "version": "0.7.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Liveness probe",
+        "description": "Report that the process is running. Never touches the database.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "The process is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness probe",
+        "description": "Report whether a trivial query against PostgreSQL succeeds.",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "Ready to serve traffic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Ready Ready Get"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready - a required dependency is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Authenticate within a tenant and obtain tokens",
+        "description": "Exchange tenant slug + email + password for an access/refresh pair.\n\nReturns the same 401 whether the tenant is unknown, the user is unknown, the\npassword is wrong, or the account is inactive.\n\nFailed attempts are counted per (tenant, email) and the counter is cleared on\nsuccess, so repeated guessing against one account is throttled while a person\nwho mistypes once and then succeeds is not. The 429 that throttling produces is\nidentical for an account that exists and one that does not - the\nanti-enumeration property has to hold for every status code, not only 401.",
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Rotate a refresh token for a new token pair",
+        "description": "Rotate the supplied refresh token.\n\nThe presented token is revoked as part of a successful rotation, so\npresenting it a second time fails. Rejection is never downgraded to\n\"issue a new token anyway\".",
+        "operationId": "refresh_api_v1_auth_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Revoke a refresh token",
+        "description": "Revoke the supplied refresh token.\n\nIdempotent, and returns 204 even for an unknown or already-revoked token so\nthe endpoint cannot be used to probe which tokens exist. Access tokens are\nshort-lived and are not blacklisted in this phase.",
+        "operationId": "logout_api_v1_auth_logout_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The authenticated user",
+        "description": "Return the caller's own profile.\n\nIdentity comes exclusively from the validated bearer token; any ``user_id``,\n``tenant_id`` or ``role`` supplied as a query parameter, header or body is\nignored. The response never includes ``password_hash``.",
+        "operationId": "read_current_user_api_v1_auth_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/presence/qr/challenge": {
+      "post": {
+        "tags": [
+          "presence"
+        ],
+        "summary": "Issue a short-lived QR challenge for the office display",
+        "description": "Mint a new dynamic QR challenge for the caller's own tenant.\n\nThe tenant and its attendance location are resolved from the authenticated\nuser, so a caller cannot issue a challenge for anyone else's site. The\nchallenge is single-use and expires after the configured TTL; the display is\nexpected to re-request one shortly before it lapses.",
+        "operationId": "create_qr_challenge_api_v1_presence_qr_challenge_post",
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QRChallengeResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "409": {
+            "description": "No active attendance location is configured"
+          },
+          "429": {
+            "description": "Too many requests"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/presence/verify": {
+      "post": {
+        "tags": [
+          "presence"
+        ],
+        "summary": "Verify physical presence from GPS and QR evidence",
+        "description": "Evaluate GPS + QR evidence for the authenticated user.\n\nOpen to any authenticated, active user of the tenant - STAFF included, since\nproving one's own presence is the normal staff action.\n\nA rejection is returned as **200 with ``verified: false``**, not a 4xx: the\nrequest was well-formed and processed, and the body carries a structured\nverdict per signal. HTTP error codes are reserved for requests that could\nnot be processed at all (401 unauthenticated, 422 malformed evidence).\n\nThe commit persists the audit row and, on success, the QR consumption.",
+        "operationId": "verify_presence_api_v1_presence_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresenceVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresenceVerificationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/attendance/check-in": {
+      "post": {
+        "tags": [
+          "attendance"
+        ],
+        "summary": "Check in, after verifying presence",
+        "description": "Record a CHECK_IN for the authenticated user.\n\nPresence is verified here as part of the action - a prior call to\n``/presence/verify`` neither helps nor is trusted. The user must currently\nbe ``NOT_CHECKED_IN``; a duplicate attempt is refused with\n``ALREADY_CHECKED_IN`` and, deliberately, without consuming the QR\nchallenge.",
+        "operationId": "check_in_api_v1_attendance_check_in_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttendanceActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceActionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/attendance/check-out": {
+      "post": {
+        "tags": [
+          "attendance"
+        ],
+        "summary": "Check out, after verifying presence",
+        "description": "Record a CHECK_OUT for the authenticated user.\n\nRequires a preceding CHECK_IN: without one the attempt is refused with\n``NOT_CHECKED_IN``. Needs its own fresh QR challenge, since the one that\nauthorised the check-in was consumed by it.",
+        "operationId": "check_out_api_v1_attendance_check_out_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttendanceActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceActionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/attendance/me": {
+      "get": {
+        "tags": [
+          "attendance"
+        ],
+        "summary": "The caller's own attendance for a day",
+        "description": "Return the authenticated user's attendance, defaulting to today (UTC).\n\nIdentity comes from the bearer token; a ``user_id`` in the query string, a\nheader or a body is ignored entirely. There is no way to ask this endpoint\nabout anybody else.",
+        "operationId": "read_my_attendance_api_v1_attendance_me_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "day",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "UTC date to report on, defaults to today",
+              "title": "Day"
+            },
+            "description": "UTC date to report on, defaults to today"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceTodayResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/attendance/me/history": {
+      "get": {
+        "tags": [
+          "attendance"
+        ],
+        "summary": "The caller's own attendance history",
+        "description": "Paginated daily history for the authenticated user, newest day first.",
+        "operationId": "read_my_history_api_v1_attendance_me_history_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive start date (UTC)",
+              "title": "From Date"
+            },
+            "description": "Inclusive start date (UTC)"
+          },
+          {
+            "name": "to_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive end date (UTC), defaults to today",
+              "title": "To Date"
+            },
+            "description": "Inclusive end date (UTC), defaults to today"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "1-based page number",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "1-based page number"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Days per page (max 100)",
+              "default": 30,
+              "title": "Page Size"
+            },
+            "description": "Days per page (max 100)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceHistoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "422": {
+            "description": "Invalid date range or pagination"
+          }
+        }
+      }
+    },
+    "/api/v1/attendance/team/today": {
+      "get": {
+        "tags": [
+          "attendance"
+        ],
+        "summary": "Today's attendance across the caller's tenant",
+        "description": "Every active user in the caller's own tenant, with today's attendance.\n\nThe tenant comes from the authenticated user, so there is no parameter that\ncould widen the query to another tenant. Users with no events still appear,\nas ``NO_RECORD`` - they are precisely who a manager is looking for.",
+        "operationId": "read_team_attendance_api_v1_attendance_team_today_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "day",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "UTC date to report on, defaults to today",
+              "title": "Day"
+            },
+            "description": "UTC date to report on, defaults to today"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamAttendanceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/attendance/users/{user_id}": {
+      "get": {
+        "tags": [
+          "attendance"
+        ],
+        "summary": "One tenant user's attendance for a day",
+        "description": "Attendance for one user in the caller's own tenant.\n\nA user id belonging to a different tenant returns **404**, identical to an id\nthat does not exist anywhere. Distinguishing the two would confirm the id is\nreal and turn this into a cross-tenant enumeration oracle.",
+        "operationId": "read_user_attendance_api_v1_attendance_users__user_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "day",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "UTC date to report on, defaults to today",
+              "title": "Day"
+            },
+            "description": "UTC date to report on, defaults to today"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceTodayResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/attendance/users/{user_id}/history": {
+      "get": {
+        "tags": [
+          "attendance"
+        ],
+        "summary": "One tenant user's attendance history",
+        "description": "Paginated daily history for one user in the caller's own tenant.\n\nRemains available for **inactive** users: they are excluded from the live\ndashboard, but their recorded history is an audit record and is never hidden\nor deleted.",
+        "operationId": "read_user_history_api_v1_attendance_users__user_id__history_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "from_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive start date (UTC)",
+              "title": "From Date"
+            },
+            "description": "Inclusive start date (UTC)"
+          },
+          {
+            "name": "to_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive end date (UTC), defaults to today",
+              "title": "To Date"
+            },
+            "description": "Inclusive end date (UTC), defaults to today"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "1-based page number",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "1-based page number"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Days per page (max 100)",
+              "default": 30,
+              "title": "Page Size"
+            },
+            "description": "Days per page (max 100)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceHistoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "422": {
+            "description": "Invalid date range or pagination"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "The caller's own profile",
+        "description": "Return the authenticated user's profile.\n\nIdentity comes from the bearer token; no id is accepted. Never includes\n``password_hash`` or any token.",
+        "operationId": "read_own_profile_api_v1_users_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Update the caller's own profile",
+        "description": "Update the caller's own safe profile fields.\n\nOnly ``name`` is writable here. Role, status, tenant and email are not - they\nare administrative or identity concerns, and a schema that never declares them\nrejects an attempt to send one with a 422.",
+        "operationId": "update_own_profile_api_v1_users_me_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/password": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Change the caller's own password",
+        "description": "Change the authenticated user's password.\n\nThe current password is verified before anything about the new one is\nconsidered, so the endpoint answers no questions for a caller who has not\nproven they own the account. A wrong current password returns 401 with a\ngeneric message - never a hint about the new password's acceptability.\n\nEvery refresh session is revoked on success: a password change usually means\nthe old one is suspect, and a 30-day refresh token would otherwise keep\nwhoever knew it signed in.",
+        "operationId": "change_own_password_api_v1_users_me_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordChangeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "New password rejected"
+          },
+          "401": {
+            "description": "Not authenticated, or current password incorrect"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Create a user in the caller's tenant",
+        "description": "Create a user inside the administrator's own tenant.\n\nThe tenant is taken from the authenticated administrator - there is no\n``tenant_id`` field, so a user cannot be created anywhere else. The password is\nhashed with Argon2id and never echoed back.\n\nA duplicate email or employee code surfaces as a clean 409; the underlying\nconstraint violation never reaches the client.",
+        "operationId": "create_user_api_v1_users_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "409": {
+            "description": "Email or employee code already in use"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List users in the caller's tenant",
+        "description": "One page of the caller's own tenant's users.\n\nFiltering and search happen in SQL - the tenant is never loaded into memory to\nbe sifted - and the search term is a bound parameter, so wildcards and quotes\nare matched literally rather than altering the query. Page size is capped.",
+        "operationId": "list_users_api_v1_users_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Match name, email or code",
+              "title": "Search"
+            },
+            "description": "Match name, email or code"
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/UserRole"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by role",
+              "title": "Role"
+            },
+            "description": "Filter by role"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/UserStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by status",
+              "title": "Status"
+            },
+            "description": "Filter by status"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "1-based page number",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "1-based page number"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Items per page",
+              "default": 25,
+              "title": "Page Size"
+            },
+            "description": "Items per page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Read one user in the caller's tenant",
+        "description": "Read one user from the caller's own tenant.\n\nAn id belonging to another tenant returns 404, identical to an id that exists\nnowhere - distinguishing them would confirm the id is real and allow\ncross-tenant enumeration.",
+        "operationId": "read_user_api_v1_users__user_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Update one user's profile",
+        "description": "Update a user's profile fields.\n\nWritable: ``email``, ``name``, ``employee_code``. Not writable here: ``role``\nand ``status``, which have dedicated endpoints so a privilege change is never\nindistinguishable from a typo correction in the audit trail.",
+        "operationId": "update_user_api_v1_users__user_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "409": {
+            "description": "Email or employee code already in use"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}/role": {
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Change one user's role",
+        "description": "Change a user's role within the caller's tenant.\n\nRefused if the target is the caller: nobody edits their own role, which closes\nthe most direct escalation path. Also refused if it would demote the tenant's\nlast active administrator. ``SUPER_ADMIN`` is not an assignable role.",
+        "operationId": "change_user_role_api_v1_users__user_id__role_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions, or changing your own role"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "409": {
+            "description": "Would leave the tenant without an administrator"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}/deactivate": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Deactivate a user",
+        "description": "Deactivate a user - a lifecycle change, never a delete.\n\nThe account can no longer log in, refresh, check in or check out, and its\nrefresh sessions are revoked immediately. Attendance events and audit rows are\nuntouched, so history stays complete and still resolves to a real identity.",
+        "operationId": "deactivate_user_api_v1_users__user_id__deactivate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions, or deactivating yourself"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "409": {
+            "description": "Would leave the tenant without an administrator"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}/activate": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Reactivate a user",
+        "description": "Reactivate a user, restoring their ability to authenticate.\n\nTheir password is left alone - reactivation is not a credential reset, and\nsilently clearing one would lock the person out instead.",
+        "operationId": "activate_user_api_v1_users__user_id__activate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}/audit": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "One user's lifecycle audit history",
+        "description": "Lifecycle audit rows for one user, newest first.\n\nScoped to the tenant, to ``target_type='User'`` and to this user, so it is not\na window onto the tenant's whole audit log - attendance and QR rows are not\nreachable here. The metadata contains only identifiers and before/after values.",
+        "operationId": "read_user_audit_api_v1_users__user_id__audit_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "1-based page number",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "1-based page number"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Items per page",
+              "default": 25,
+              "title": "Page Size"
+            },
+            "description": "Items per page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAuditResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tenant/me": {
+      "get": {
+        "tags": [
+          "tenant"
+        ],
+        "summary": "The caller's own tenant",
+        "description": "Return the tenant the authenticated user belongs to.\n\nOpen to any active user: knowing which organisation you work for is not\nprivileged. The response carries no user counts, credentials or configuration.",
+        "operationId": "read_own_tenant_api_v1_tenant_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "tenant"
+        ],
+        "summary": "Update the caller's own tenant",
+        "description": "Update the tenant's display name.\n\nOnly ``name``. ``slug`` is excluded despite looking like ordinary metadata: it\nis the identifier every employee types at login, so renaming it would lock out\nthe whole company at once.",
+        "operationId": "update_own_tenant_api_v1_tenant_me_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AttendanceActionRequest": {
+        "properties": {
+          "latitude": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude"
+          },
+          "longitude": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude"
+          },
+          "accuracy_meters": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Accuracy Meters"
+          },
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Challenge Id"
+          },
+          "nonce": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Nonce"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "latitude",
+          "longitude",
+          "accuracy_meters",
+          "challenge_id",
+          "nonce"
+        ],
+        "title": "AttendanceActionRequest",
+        "description": "Evidence for a check-in or check-out.\n\nIdentical to the presence contract: coordinates, accuracy, challenge id and\nnonce. Note what is *absent* - no user, no tenant, no timestamp, no event\ntype and no verdict. Those are all determined by the server, and inherited\n``extra=\"forbid\"`` turns an attempt to supply one into a 422 rather than a\nsilently ignored field."
+      },
+      "AttendanceActionResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/AttendanceEventType"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AttendanceState"
+          },
+          "attendance_event_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attendance Event Id"
+          },
+          "event_timestamp": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Timestamp"
+          },
+          "presence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresenceSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "success",
+          "event_type",
+          "status"
+        ],
+        "title": "AttendanceActionResponse",
+        "description": "The outcome of a check-in or check-out attempt.\n\nA refusal is reported as ``success: false`` with HTTP 200, matching\n``/presence/verify``. The request was well-formed and fully processed; the\nanswer is \"no, and here is exactly why\". Returning the presence breakdown\nalongside the reason is what lets a client tell the user *\"you are 350 m\naway\"* rather than just *\"failed\"*. HTTP error codes stay reserved for\nrequests that could not be processed at all - 401 unauthenticated, 422\nmalformed or smuggled fields."
+      },
+      "AttendanceDayResponse": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DayStatus"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/AttendanceSessionResponse"
+            },
+            "type": "array",
+            "title": "Sessions"
+          },
+          "first_check_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Check In"
+          },
+          "last_check_out": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Check Out"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "date",
+          "status"
+        ],
+        "title": "AttendanceDayResponse",
+        "description": "One user's attendance for one UTC calendar day.\n\n``NO_RECORD`` means no attendance event was recorded - **not** that the\nperson was absent from work. Karya cannot distinguish leave, travel, or a\nfailure to reach the QR display."
+      },
+      "AttendanceEventType": {
+        "type": "string",
+        "enum": [
+          "CHECK_IN",
+          "CHECK_OUT"
+        ],
+        "title": "AttendanceEventType",
+        "description": "Kind of attendance event."
+      },
+      "AttendanceHistoryResponse": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "from_date": {
+            "type": "string",
+            "format": "date",
+            "title": "From Date"
+          },
+          "to_date": {
+            "type": "string",
+            "format": "date",
+            "title": "To Date"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AttendanceDayResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationResponse"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "from_date",
+          "to_date",
+          "items",
+          "pagination"
+        ],
+        "title": "AttendanceHistoryResponse",
+        "description": "A page of daily attendance, newest day first.\n\nEvery date in the requested range appears, including days with no events, so\na calendar can distinguish \"nothing recorded\" from \"outside the range\"."
+      },
+      "AttendanceSessionResponse": {
+        "properties": {
+          "check_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check In"
+          },
+          "check_out": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Out"
+          },
+          "check_in_event_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check In Event Id"
+          },
+          "check_out_event_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Out Event Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AttendanceSessionResponse",
+        "description": "One check-in/check-out pair.\n\nEither side may be ``null``: an open session has no ``check_out``, and a\nsession that began the previous day (a night shift) has no ``check_in`` on\nthe day it closes."
+      },
+      "AttendanceState": {
+        "type": "string",
+        "enum": [
+          "NOT_CHECKED_IN",
+          "CHECKED_IN"
+        ],
+        "title": "AttendanceState",
+        "description": "A user's current attendance state.\n\nDerived from their most recent attendance event - there is deliberately no\n``current_status`` column. A denormalised status would be a second source of\ntruth that can drift from the events, and the events are the audit record\nthat matters.\n\n``CHECK_OUT`` returns a user to ``NOT_CHECKED_IN``, which is what allows\nrepeated day-after-day cycles without any reset step."
+      },
+      "AttendanceTodayResponse": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AttendanceState"
+          },
+          "day": {
+            "$ref": "#/components/schemas/AttendanceDayResponse"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "state",
+          "day"
+        ],
+        "title": "AttendanceTodayResponse",
+        "description": "The caller's (or a named user's) attendance for a single day."
+      },
+      "DayStatus": {
+        "type": "string",
+        "enum": [
+          "NO_RECORD",
+          "CHECKED_IN",
+          "COMPLETED"
+        ],
+        "title": "DayStatus",
+        "description": "How one calendar day looks for one user.\n\n``NO_RECORD`` is named carefully. It states only that **no attendance event\nwas recorded** for that day - it is *not* a claim that the person was absent\nfrom work. They may have been on leave, travelling, working elsewhere, or\nsimply unable to reach the QR display; Karya has no way to tell, and leave\nand shift management do not exist yet. \"ABSENT\" would assert something the\ndata does not support.\n\nDistinct from :class:`AttendanceState`, which is the *live* state machine\nPhase 4 uses to accept or refuse a check-in. This enum describes a completed\n(or in-progress) day and therefore needs the third ``COMPLETED`` value."
+      },
+      "FailureReason": {
+        "type": "string",
+        "enum": [
+          "NO_ACTIVE_ATTENDANCE_LOCATION",
+          "GPS_INVALID",
+          "GPS_ACCURACY_TOO_LOW",
+          "OUTSIDE_GEOFENCE",
+          "QR_NOT_FOUND",
+          "QR_EXPIRED",
+          "QR_ALREADY_USED",
+          "QR_REVOKED",
+          "QR_NONCE_MISMATCH",
+          "QR_TENANT_MISMATCH",
+          "QR_LOCATION_MISMATCH"
+        ],
+        "title": "FailureReason",
+        "description": "Why a presence attempt was rejected.\n\nSome values are internal-only; see :data:`CLIENT_SAFE_REASON` for the\nmapping applied before a reason reaches an API response."
+      },
+      "GPSVerificationResult": {
+        "properties": {
+          "verified": {
+            "type": "boolean",
+            "title": "Verified"
+          },
+          "distance_meters": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance Meters"
+          },
+          "accuracy_meters": {
+            "type": "number",
+            "title": "Accuracy Meters"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "verified",
+          "distance_meters",
+          "accuracy_meters"
+        ],
+        "title": "GPSVerificationResult",
+        "description": "Server-computed GPS outcome."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "LoginRequest": {
+        "properties": {
+          "tenant_slug": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Tenant Slug"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 8,
+            "format": "password",
+            "title": "Password",
+            "writeOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tenant_slug",
+          "email",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "description": "Credentials for ``POST /api/v1/auth/login``.\n\nThe tenant is identified by slug: login is tenant-scoped, and the user\nlookup is constrained to the resolved tenant."
+      },
+      "PaginationResponse": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "total_pages": {
+            "type": "integer",
+            "title": "Total Pages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "page",
+          "page_size",
+          "total",
+          "total_pages"
+        ],
+        "title": "PaginationResponse",
+        "description": "Page metadata. ``total`` counts **days** in the range, not events."
+      },
+      "PasswordChangeRequest": {
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "minLength": 1,
+            "format": "password",
+            "title": "Current Password",
+            "writeOnly": true
+          },
+          "new_password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 8,
+            "format": "password",
+            "title": "New Password",
+            "writeOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "PasswordChangeRequest",
+        "description": "A self-service password change.\n\nNo user id: the account is always the authenticated caller, so there is no\nfield through which an administrator could set someone else's password."
+      },
+      "PasswordChangeResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success",
+            "default": true
+          },
+          "sessions_revoked": {
+            "type": "integer",
+            "title": "Sessions Revoked"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sessions_revoked"
+        ],
+        "title": "PasswordChangeResponse",
+        "description": "Outcome of a password change."
+      },
+      "PresenceStatus": {
+        "type": "string",
+        "enum": [
+          "PRESENCE_VERIFIED",
+          "PRESENCE_REJECTED"
+        ],
+        "title": "PresenceStatus",
+        "description": "Outcome of a presence-verification attempt.\n\nOnly two outcomes exist in Phase 3. ``MANUAL_REVIEW`` deliberately does not\nappear here: it belongs to ``AttendanceEvent.verification_status``, where\nPhase 4 can apply policy to a rejected-but-plausible attempt. Adding a third\npresence outcome now would be complexity with no consumer."
+      },
+      "PresenceSummary": {
+        "properties": {
+          "verified": {
+            "type": "boolean",
+            "title": "Verified"
+          },
+          "gps": {
+            "$ref": "#/components/schemas/GPSVerificationResult"
+          },
+          "qr": {
+            "$ref": "#/components/schemas/QRVerificationResult"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "verified",
+          "gps",
+          "qr"
+        ],
+        "title": "PresenceSummary",
+        "description": "The presence evidence behind an attendance decision."
+      },
+      "PresenceVerificationRequest": {
+        "properties": {
+          "latitude": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude"
+          },
+          "longitude": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude"
+          },
+          "accuracy_meters": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Accuracy Meters"
+          },
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Challenge Id"
+          },
+          "nonce": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Nonce"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "latitude",
+          "longitude",
+          "accuracy_meters",
+          "challenge_id",
+          "nonce"
+        ],
+        "title": "PresenceVerificationRequest",
+        "description": "Evidence submitted by a staff device.\n\nNote what is absent: no identity, no tenant, no verdict, no distance. All of\nthose are derived from the bearer token and the database."
+      },
+      "PresenceVerificationResponse": {
+        "properties": {
+          "verified": {
+            "type": "boolean",
+            "title": "Verified"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PresenceStatus"
+          },
+          "gps": {
+            "$ref": "#/components/schemas/GPSVerificationResult"
+          },
+          "qr": {
+            "$ref": "#/components/schemas/QRVerificationResult"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FailureReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "verified",
+          "status",
+          "gps",
+          "qr"
+        ],
+        "title": "PresenceVerificationResponse",
+        "description": "The presence decision returned to the caller."
+      },
+      "QRChallengeResponse": {
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Challenge Id"
+          },
+          "nonce": {
+            "type": "string",
+            "title": "Nonce"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "challenge_id",
+          "nonce",
+          "expires_at",
+          "expires_in"
+        ],
+        "title": "QRChallengeResponse",
+        "description": "A freshly issued challenge, for the office display to render as a QR.\n\nThe display encodes ``challenge_id`` and ``nonce`` into the QR image; those\ntwo are all a phone needs to submit. Nothing else about the tenant, the\nlocation or its coordinates is included - the server stays authoritative and\nthe QR stays compact."
+      },
+      "QRVerificationResult": {
+        "properties": {
+          "verified": {
+            "type": "boolean",
+            "title": "Verified"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "verified"
+        ],
+        "title": "QRVerificationResult",
+        "description": "QR challenge outcome. Deliberately carries no nonce."
+      },
+      "RefreshTokenRequest": {
+        "properties": {
+          "refresh_token": {
+            "type": "string",
+            "minLength": 1,
+            "format": "password",
+            "title": "Refresh Token",
+            "writeOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "title": "RefreshTokenRequest",
+        "description": "Body for ``POST /api/v1/auth/refresh`` and ``.../logout``."
+      },
+      "RoleUpdateRequest": {
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/UserRole"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "title": "RoleUpdateRequest",
+        "description": "A role change, on its own dedicated endpoint."
+      },
+      "SelfUpdateRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SelfUpdateRequest",
+        "description": "Profile fields a user may change about themselves.\n\nNarrower than the administrator's version: no email, because it is the login\nidentity - changing it unilaterally is how somebody locks themselves out, and\nit belongs to the tenant's administration. No employee code either, since the\ntenant assigns it."
+      },
+      "TeamAttendanceMember": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "employee_code": {
+            "type": "string",
+            "title": "Employee Code"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DayStatus"
+          },
+          "check_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check In"
+          },
+          "check_out": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Out"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/AttendanceSessionResponse"
+            },
+            "type": "array",
+            "title": "Sessions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "name",
+          "employee_code",
+          "status"
+        ],
+        "title": "TeamAttendanceMember",
+        "description": "One colleague on the tenant dashboard.\n\nIdentity is limited to what a manager needs to recognise the person. Email is\ndeliberately omitted - it is contact data, not attendance data."
+      },
+      "TeamAttendanceResponse": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/TeamAttendanceSummary"
+          },
+          "employees": {
+            "items": {
+              "$ref": "#/components/schemas/TeamAttendanceMember"
+            },
+            "type": "array",
+            "title": "Employees"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "date",
+          "summary",
+          "employees"
+        ],
+        "title": "TeamAttendanceResponse",
+        "description": "Today's attendance across the caller's own tenant."
+      },
+      "TeamAttendanceSummary": {
+        "properties": {
+          "total_staff": {
+            "type": "integer",
+            "title": "Total Staff"
+          },
+          "no_record": {
+            "type": "integer",
+            "title": "No Record"
+          },
+          "checked_in": {
+            "type": "integer",
+            "title": "Checked In"
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total_staff",
+          "no_record",
+          "checked_in",
+          "completed"
+        ],
+        "title": "TeamAttendanceSummary",
+        "description": "Headcount by status. The three buckets always sum to ``total_staff``."
+      },
+      "TenantResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TenantResponse",
+        "description": "The caller's own tenant."
+      },
+      "TenantUpdateRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TenantUpdateRequest",
+        "description": "The only tenant field a tenant administrator may change.\n\n``slug`` is excluded even though it is human-readable metadata: it is the\ntenant identifier every user types at login, so changing it would silently\nlock out an entire company. ``status`` is excluded because tenant suspension\nis an operator action, not a self-service one. ``id`` and the timestamps are\nnot writable anywhere."
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "refresh_token": {
+            "type": "string",
+            "title": "Refresh Token"
+          },
+          "token_type": {
+            "type": "string",
+            "title": "Token Type",
+            "default": "bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "expires_in"
+        ],
+        "title": "TokenResponse",
+        "description": "Credentials returned by login and refresh.\n\n``refresh_token`` is the only time the raw value is ever exposed; the server\nkeeps just its hash."
+      },
+      "UserAuditEntryResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor User Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "actor_user_id",
+          "created_at"
+        ],
+        "title": "UserAuditEntryResponse",
+        "description": "One lifecycle audit row.\n\n``metadata`` carries only identifiers and before/after values written by\n:mod:`app.services.users.service` - never a password, hash, token or nonce."
+      },
+      "UserAuditResponse": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserAuditEntryResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/UserListPagination"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "items",
+          "pagination"
+        ],
+        "title": "UserAuditResponse",
+        "description": "A page of one user's lifecycle audit history."
+      },
+      "UserCreateRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 8,
+            "format": "password",
+            "title": "Password",
+            "writeOnly": true
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "employee_code": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Employee Code"
+          },
+          "role": {
+            "$ref": "#/components/schemas/UserRole",
+            "default": "STAFF"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email",
+          "password",
+          "name",
+          "employee_code"
+        ],
+        "title": "UserCreateRequest",
+        "description": "Fields a tenant administrator may supply when creating a user.\n\n``tenant_id`` is absent by design - the tenant comes from the authenticated\nadministrator, so a user can only ever be created inside the caller's own\ntenant."
+      },
+      "UserDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Tenant Id"
+          },
+          "employee_code": {
+            "type": "string",
+            "title": "Employee Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "employee_code",
+          "name",
+          "email",
+          "role",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "UserDetailResponse",
+        "description": "A user as returned by the management endpoints.\n\nExtends :class:`UserResponse` with lifecycle timestamps, which an\nadministrator needs to see. Still an explicit allowlist - it inherits the\nnamed fields rather than serialising the ORM object, so a column added later\ncannot leak."
+      },
+      "UserListPagination": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "total_pages": {
+            "type": "integer",
+            "title": "Total Pages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "page",
+          "page_size",
+          "total",
+          "total_pages"
+        ],
+        "title": "UserListPagination",
+        "description": "Page metadata for a user listing."
+      },
+      "UserListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserDetailResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/UserListPagination"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "pagination"
+        ],
+        "title": "UserListResponse",
+        "description": "One page of the caller's own tenant's users."
+      },
+      "UserResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Tenant Id"
+          },
+          "employee_code": {
+            "type": "string",
+            "title": "Employee Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "employee_code",
+          "name",
+          "email",
+          "role",
+          "status"
+        ],
+        "title": "UserResponse",
+        "description": "The authenticated user, as returned by ``GET /api/v1/auth/me``.\n\nDeliberately excludes ``password_hash`` and every other authentication\nartefact. ``created_at``/``updated_at`` are omitted too - nothing needs them\nyet, and the narrower the response, the less there is to leak."
+      },
+      "UserRole": {
+        "type": "string",
+        "enum": [
+          "SUPER_ADMIN",
+          "TENANT_ADMIN",
+          "MANAGER",
+          "STAFF"
+        ],
+        "title": "UserRole",
+        "description": "Roles a user may hold. Enforcement (RBAC) is a later phase."
+      },
+      "UserStatus": {
+        "type": "string",
+        "enum": [
+          "ACTIVE",
+          "INACTIVE"
+        ],
+        "title": "UserStatus",
+        "description": "Lifecycle status of a user account."
+      },
+      "UserUpdateRequest": {
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "employee_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UserUpdateRequest",
+        "description": "Profile fields a tenant administrator may change.\n\nDeliberately excludes ``role`` and ``status``: those are lifecycle and\nprivilege changes with their own endpoints, their own authorization and their\nown audit actions. Folding them into a generic update would make a privilege\nchange indistinguishable from a typo correction in the audit trail.\n\nPATCH semantics: every field is optional and only what is sent is written."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "description": "JWT access token",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "health",
+      "description": "Liveness and readiness probes. Unauthenticated, and deliberately uninformative: `/health` never touches the database, `/ready` does."
+    },
+    {
+      "name": "auth",
+      "description": "Login, refresh-token rotation, logout and the caller's own profile. Every credential failure returns the same 401, so neither a tenant nor a user can be enumerated."
+    },
+    {
+      "name": "presence",
+      "description": "GPS and dynamic-QR presence verification. Issuing a QR challenge is restricted to MANAGER and TENANT_ADMIN; verifying presence is open to any active user. A QR challenge is single-use and short-lived."
+    },
+    {
+      "name": "attendance",
+      "description": "Check-in, check-out and read-only attendance views. Presence is re-verified server-side as part of every check-in and check-out. Reading another user's attendance requires MANAGER or TENANT_ADMIN."
+    },
+    {
+      "name": "users",
+      "description": "Self-service account endpoints, open to any active user, and user administration, restricted to TENANT_ADMIN. MANAGER has no user-management powers."
+    },
+    {
+      "name": "tenant",
+      "description": "The caller's own tenant profile."
+    }
+  ]
+}
