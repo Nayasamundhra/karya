@@ -10,7 +10,7 @@ import type { ManifestOptions } from 'vite-plugin-pwa'
 export const pwaManifest: Partial<ManifestOptions> = {
   name: 'Karya',
   short_name: 'Karya',
-  description: 'Multi-tenant staff attendance and presence verification.',
+  description: 'Multi-tenant employee attendance and presence verification.',
   theme_color: '#0f172a',
   background_color: '#ffffff',
   display: 'standalone',

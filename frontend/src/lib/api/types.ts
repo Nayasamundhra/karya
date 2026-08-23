@@ -36,6 +36,7 @@ export type PresenceVerificationResponse = Schemas['PresenceVerificationResponse
 export type AttendanceActionRequest = Schemas['AttendanceActionRequest']
 export type AttendanceActionResponse = Schemas['AttendanceActionResponse']
 export type AttendanceTodayResponse = Schemas['AttendanceTodayResponse']
+export type AttendanceDayResponse = Schemas['AttendanceDayResponse']
 export type AttendanceHistoryResponse = Schemas['AttendanceHistoryResponse']
 export type TeamAttendanceResponse = Schemas['TeamAttendanceResponse']
 

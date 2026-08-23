@@ -48,6 +48,8 @@ export const routes: RouteObject[] = [
         children: [
           { index: true, lazy: lazyRoute(() => import('@/pages/HomePage')) },
           { path: 'attendance', lazy: lazyRoute(() => import('@/pages/staff/AttendancePage')) },
+          { path: 'attendance/check-in', lazy: lazyRoute(() => import('@/pages/staff/CheckInPage')) },
+          { path: 'attendance/check-out', lazy: lazyRoute(() => import('@/pages/staff/CheckOutPage')) },
           { path: 'profile', lazy: lazyRoute(() => import('@/pages/ProfilePage')) },
           {
             element: <RequireRole roles={['MANAGER', 'TENANT_ADMIN']} />,

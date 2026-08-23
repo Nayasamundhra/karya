@@ -5,7 +5,7 @@ import { useAuth } from '@/features/auth/useAuth'
 import type { UserRole } from '@/lib/api/types'
 
 const NEXT_STEP: Record<UserRole, { icon: typeof CalendarClock; text: string }> = {
-  STAFF: { icon: CalendarClock, text: 'Checking in and out will appear here once Phase 9 ships.' },
+  STAFF: { icon: CalendarClock, text: 'Check in and out, and see your attendance history, from Attendance.' },
   MANAGER: { icon: Users, text: "Your team's attendance overview will appear here once Phase 10 ships." },
   TENANT_ADMIN: { icon: UserCog, text: 'Full user and organization management will appear here once Phase 10 ships.' },
   SUPER_ADMIN: { icon: UserCog, text: 'Platform administration is not part of Karya yet.' },
@@ -13,10 +13,10 @@ const NEXT_STEP: Record<UserRole, { icon: typeof CalendarClock; text: string }> 
 
 /**
  * A deliberately light landing page. The real per-role dashboards are
- * Phase 9 (staff attendance) and Phase 10 (manager/admin) — see CLAUDE.md.
- * This still answers §38's "where am I / what's my status / what's next"
- * for the one thing Phase 8 actually knows: who signed in, and what role
- * they hold.
+ * Phase 9 (employee attendance) and Phase 10 (manager/admin) — see
+ * CLAUDE.md. This still answers §38's "where am I / what's my status /
+ * what's next" for the one thing Phase 8 actually knows: who signed in, and
+ * what role they hold.
  */
 export default function HomePage() {
   const { user } = useAuth()
@@ -60,7 +60,9 @@ function roleLabel(role: UserRole): string {
     case 'MANAGER':
       return 'Manager'
     case 'STAFF':
-      return 'Staff'
+      // Product-facing terminology says "Employee", not "Staff" (CLAUDE.md) —
+      // the `STAFF` role identifier itself is the backend's, left unchanged.
+      return 'Employee'
     case 'SUPER_ADMIN':
       return 'Super Admin'
   }

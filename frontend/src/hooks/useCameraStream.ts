@@ -57,8 +57,19 @@ export function useCameraStream(): UseCameraStreamResult {
   const [error, setError] = useState<CameraErrorReason | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  // Bumped by every `start()`/`stop()` call. `getUserMedia` is asynchronous,
+  // so React 19's StrictMode dev double-invoke (mount → cleanup → mount)
+  // — and any other back-to-back `start()` call, e.g. a fast permission
+  // retry — can leave two calls in flight at once. Without this guard, the
+  // *first* (stale) call resolves after the second, reassigns
+  // `video.srcObject` back to its own now-orphaned stream, and aborts the
+  // second call's already-playing `<video>.play()` with `AbortError` —
+  // which reported as a generic, unrecoverable-looking "camera could not be
+  // started" instead of ever reaching `permission: 'granted'`.
+  const callIdRef = useRef(0)
 
   const stop = useCallback(() => {
+    callIdRef.current += 1 // any in-flight start() from here on is stale
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
     if (videoRef.current) videoRef.current.srcObject = null
@@ -71,6 +82,7 @@ export function useCameraStream(): UseCameraStreamResult {
       return
     }
 
+    const callId = (callIdRef.current += 1)
     setIsLoading(true)
     setError(null)
     try {
@@ -80,18 +92,27 @@ export function useCameraStream(): UseCameraStreamResult {
         video: { facingMode: 'environment' },
         audio: false,
       })
+      if (callId !== callIdRef.current) {
+        // Superseded by a later start()/stop() while getUserMedia was
+        // pending — release this stream immediately rather than resurrect
+        // a camera nothing is using any more.
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
+      if (callId !== callIdRef.current) return
       setPermission('granted')
     } catch (err) {
+      if (callId !== callIdRef.current) return
       const reason = reasonForError(err)
       setError(reason)
       if (reason === 'permission_denied') setPermission('denied')
     } finally {
-      setIsLoading(false)
+      if (callId === callIdRef.current) setIsLoading(false)
     }
   }, [])
 
