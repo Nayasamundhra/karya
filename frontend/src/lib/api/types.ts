@@ -39,6 +39,8 @@ export type AttendanceTodayResponse = Schemas['AttendanceTodayResponse']
 export type AttendanceDayResponse = Schemas['AttendanceDayResponse']
 export type AttendanceHistoryResponse = Schemas['AttendanceHistoryResponse']
 export type TeamAttendanceResponse = Schemas['TeamAttendanceResponse']
+export type TeamAttendanceMember = Schemas['TeamAttendanceMember']
+export type TeamAttendanceSummary = Schemas['TeamAttendanceSummary']
 
 export type UserRole = Schemas['UserRole']
 export type UserStatus = Schemas['UserStatus']
@@ -57,4 +59,4 @@ export function isUserRole(value: string): value is UserRole {
 
 /** Roles a tenant administrator may assign. SUPER_ADMIN is a platform role —
  * the backend rejects assigning it with a 422, so it is never offered here. */
-export const ASSIGNABLE_ROLES: readonly UserRole[] = ['TENANT_ADMIN', 'MANAGER', 'STAFF']
+export const ASSIGNABLE_ROLES = ['TENANT_ADMIN', 'MANAGER', 'STAFF'] as const

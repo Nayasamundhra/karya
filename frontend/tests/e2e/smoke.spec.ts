@@ -17,7 +17,7 @@ test.describe('unauthenticated visitor', () => {
   test('is redirected away from an admin-only route without ever seeing its content', async ({ page }) => {
     await page.goto('/admin/users')
     await expect(page.getByRole('heading', { name: 'Sign in to Karya' })).toBeVisible()
-    await expect(page.getByText('Manage users')).toHaveCount(0)
+    await expect(page.getByText('Manage employees')).toHaveCount(0)
   })
 
   test('sees the real backend error for invalid credentials, not a generic failure', async ({ page }) => {

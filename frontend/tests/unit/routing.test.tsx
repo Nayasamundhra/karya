@@ -74,20 +74,20 @@ describe('routing and role-based access', () => {
     expect(within(nav).getByText('Home')).toBeInTheDocument()
     expect(within(nav).getByText('Attendance')).toBeInTheDocument()
     expect(within(nav).queryByText('Team')).not.toBeInTheDocument()
-    expect(within(nav).queryByText('Manage users')).not.toBeInTheDocument()
+    expect(within(nav).queryByText('Manage employees')).not.toBeInTheDocument()
   })
 
   it('blocks STAFF from an admin-only route with a 403 page, not the admin content', async () => {
     signInAs('STAFF')
     renderAt('/admin/users')
     expect(await screen.findByRole('heading', { name: /don't have permission/i })).toBeInTheDocument()
-    expect(screen.queryByText(/manage users/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/manage employees/i)).not.toBeInTheDocument()
   })
 
   it('lets TENANT_ADMIN reach the admin-only route', async () => {
     signInAs('TENANT_ADMIN')
     renderAt('/admin/users')
-    expect(await screen.findByRole('heading', { name: /^manage users$/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /^manage employees$/i })).toBeInTheDocument()
   })
 
   it('lets MANAGER reach the team route', async () => {
@@ -99,6 +99,18 @@ describe('routing and role-based access', () => {
   it('blocks MANAGER from a TENANT_ADMIN-only route', async () => {
     signInAs('MANAGER')
     renderAt('/admin/users')
+    expect(await screen.findByRole('heading', { name: /don't have permission/i })).toBeInTheDocument()
+  })
+
+  it('lets MANAGER reach an employee detail route', async () => {
+    signInAs('MANAGER')
+    renderAt('/team/11111111-1111-1111-1111-111111111111')
+    expect(await screen.findByRole('heading', { name: /^employee attendance$/i })).toBeInTheDocument()
+  })
+
+  it('blocks STAFF from an employee detail route', async () => {
+    signInAs('STAFF')
+    renderAt('/team/11111111-1111-1111-1111-111111111111')
     expect(await screen.findByRole('heading', { name: /don't have permission/i })).toBeInTheDocument()
   })
 

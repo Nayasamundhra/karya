@@ -53,7 +53,10 @@ export const routes: RouteObject[] = [
           { path: 'profile', lazy: lazyRoute(() => import('@/pages/ProfilePage')) },
           {
             element: <RequireRole roles={['MANAGER', 'TENANT_ADMIN']} />,
-            children: [{ path: 'team', lazy: lazyRoute(() => import('@/pages/manager/TeamPage')) }],
+            children: [
+              { path: 'team', lazy: lazyRoute(() => import('@/pages/manager/TeamPage')) },
+              { path: 'team/:userId', lazy: lazyRoute(() => import('@/pages/manager/EmployeeDetailPage')) },
+            ],
           },
           {
             element: <RequireRole roles={['TENANT_ADMIN']} />,

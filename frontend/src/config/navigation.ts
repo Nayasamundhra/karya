@@ -47,7 +47,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     id: 'admin-users',
-    label: 'Manage users',
+    label: 'Manage employees',
     to: '/admin/users',
     icon: Users,
     roles: ['TENANT_ADMIN'],
