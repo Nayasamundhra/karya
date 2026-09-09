@@ -61,6 +61,7 @@ _SWEEP_INTERVAL_SECONDS: Final[float] = 60.0
 
 MINUTE: Final[int] = 60
 FIFTEEN_MINUTES: Final[int] = 15 * 60
+HOUR: Final[int] = 60 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,13 +228,16 @@ class InMemoryRateLimiter:
         """Drop windows that can no longer reject anything.
 
         A window is only ever compared against the rule it was created with, and
-        the longest rule Karya configures is 15 minutes, so anything older than
-        that is dead regardless of which rule owns it.
+        the longest rule Karya configures is one hour (onboarding), so anything
+        older than that is dead regardless of which rule owns it. This bound must
+        move if a longer-window rule is ever added - a stale cutoff here would
+        silently reset a live counter early, undercounting exactly the callers
+        the rule exists to catch.
         """
         if now - self._last_sweep < _SWEEP_INTERVAL_SECONDS:
             return
         self._last_sweep = now
-        cutoff = now - FIFTEEN_MINUTES
+        cutoff = now - HOUR
         for key in [k for k, w in self._windows.items() if w.started_at < cutoff]:
             del self._windows[key]
 
@@ -293,6 +297,14 @@ class Rules:
         )
         self.admin_write = RateLimitRule(
             "admin_write", config.rate_limit_admin_write_per_minute, MINUTE
+        )
+        self.onboarding = RateLimitRule(
+            "onboarding", config.rate_limit_onboarding_per_hour, HOUR
+        )
+        self.email_verification = RateLimitRule(
+            "email_verification",
+            config.rate_limit_email_verification_per_hour,
+            HOUR,
         )
 
 

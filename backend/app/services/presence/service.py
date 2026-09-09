@@ -86,7 +86,7 @@ def _record_audit(
     *,
     action: str,
     tenant_id: uuid.UUID,
-    actor_user_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None,
     target_id: uuid.UUID | None,
     metadata: dict[str, Any],
 ) -> AuditLog:
@@ -112,12 +112,18 @@ def issue_qr_challenge(
     session: Session,
     *,
     tenant_id: uuid.UUID,
-    actor_user_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None = None,
     config: Settings | None = None,
 ) -> tuple[QRChallenge, int]:
     """Create a challenge for the tenant's active location and audit it.
 
     Returns the challenge and its TTL in seconds.
+
+    ``actor_user_id`` is ``None`` when a kiosk's display token (rather than a
+    signed-in MANAGER/TENANT_ADMIN) is the caller - see
+    `app.api.display_deps`. A display token identifies a screen, not a
+    person, and `audit_logs.actor_user_id` is nullable for exactly this case
+    (the same way it already is for tenant-less platform actions).
 
     Raises:
         NoActiveAttendanceLocationError: if the tenant has no active location.

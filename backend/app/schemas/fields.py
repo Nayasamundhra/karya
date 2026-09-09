@@ -26,6 +26,21 @@ NAME_MAX_LENGTH: Final[int] = 255
 #: Matches `tenants.slug VARCHAR(100)` / `tenants.name VARCHAR(255)`.
 SLUG_MAX_LENGTH: Final[int] = 100
 TENANT_NAME_MAX_LENGTH: Final[int] = 255
+#: Matches `attendance_locations.description VARCHAR(500)` - a free-text
+#: address/description, not a name, so it gets more room than `NAME_MAX_LENGTH`.
+LOCATION_DESCRIPTION_MAX_LENGTH: Final[int] = 500
+
+
+def trim_or_none(value: object) -> object:
+    """`trim`, plus: an empty (post-trim) string becomes ``None``.
+
+    For an *optional* free-text field, lets a client clear it by submitting
+    ``""`` rather than needing to omit the key entirely.
+    """
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return value
 
 
 def normalize_email(value: object) -> object:

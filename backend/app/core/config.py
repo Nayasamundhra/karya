@@ -21,7 +21,7 @@ import logging
 from functools import lru_cache
 from typing import Final
 
-from pydantic import PostgresDsn, SecretStr, computed_field, model_validator
+from pydantic import PostgresDsn, SecretStr, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Version reported by ``/openapi.json`` and the startup log line. Single source
@@ -206,6 +206,67 @@ class Settings(BaseSettings):
     # rotates the code, so a photographed QR is useless within seconds.
     qr_challenge_ttl_seconds: int = 30
 
+    # --- Outbound email (Phase 11: onboarding) -------------------------------
+    # stdlib `smtplib`, no third-party dependency - same precedent as Phase 7's
+    # logging/rate-limiting/security-headers choices. Left unset, sending
+    # degrades to a structured log line instead of failing, so a fresh local
+    # checkout and the test suite need no mail server at all. A deployment
+    # that forgets to configure this finds out from its own logs, not a 500.
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_from_address: str = "no-reply@karya.local"
+    #: STARTTLS on the plaintext connection, not implicit TLS. True fits every
+    #: mainstream provider's port-587 submission endpoint; a provider that
+    #: instead wants implicit TLS on 465 needs a small follow-up, not a design
+    #: change - see the mailer module.
+    smtp_use_tls: bool = True
+    #: Socket timeout for the whole SMTP conversation (connect, STARTTLS,
+    #: auth, send). A hung mail server must fail the request in seconds, not
+    #: leave the onboarding transaction open indefinitely.
+    smtp_timeout_seconds: int = 10
+
+    # --- Onboarding (Phase 11) ------------------------------------------------
+    # Where the verification link points. Deliberately separate from
+    # CORS_ALLOWED_ORIGINS: that list is a security allowlist enforced by the
+    # browser, this is just "where to send a human" and has no security
+    # meaning of its own - the token in the link is what actually authorizes
+    # anything.
+    public_app_url: str = "http://localhost:5173"
+    email_verification_ttl_hours: int = 24
+
+    @field_validator("public_app_url", mode="after")
+    @classmethod
+    def _normalize_public_app_url(cls, value: str) -> str:
+        """Strip a trailing slash and require a real ``http(s)://`` origin.
+
+        `onboarding.service._verification_url` builds a link by naive string
+        concatenation (``f"{public_app_url}/onboarding/verify?token=..."``);
+        a configured value with a trailing slash would silently double it
+        into ``.../org//onboarding/verify``, and a value with no scheme at
+        all would produce a link no mail client treats as clickable. Both
+        are configuration mistakes worth failing fast on, in every
+        environment, not just production.
+        """
+        stripped = value.strip().rstrip("/")
+        if not stripped.startswith(("http://", "https://")):
+            raise ValueError(
+                "PUBLIC_APP_URL must start with http:// or https://; "
+                f"got {value!r}."
+            )
+        return stripped
+
+    #: Per-IP: this is the one public, unauthenticated *write* endpoint in the
+    #: whole API, so its budget is deliberately tight - a handful of
+    #: organizations signing up from one address per hour, not a volume any
+    #: real user needs.
+    rate_limit_onboarding_per_hour: int = 5
+    #: Separate budget from onboarding itself: a legitimate user retrying a
+    #: mistyped or already-clicked verification link must not compete with
+    #: someone else's signup attempts from behind the same NAT.
+    rate_limit_email_verification_per_hour: int = 20
+
     # --- Derived values -----------------------------------------------------
     def _build_url(self, database: str) -> str:
         """Compose a psycopg connection URL for ``database``.
@@ -287,6 +348,10 @@ class Settings(BaseSettings):
             raise ValueError("MAX_GPS_ACCURACY_METERS must be positive.")
         if self.qr_challenge_ttl_seconds <= 0:
             raise ValueError("QR_CHALLENGE_TTL_SECONDS must be positive.")
+        if self.email_verification_ttl_hours <= 0:
+            raise ValueError("EMAIL_VERIFICATION_TTL_HOURS must be positive.")
+        if self.smtp_timeout_seconds <= 0:
+            raise ValueError("SMTP_TIMEOUT_SECONDS must be positive.")
 
         if "*" in self.cors_origins:
             # Karya sends credentials, for which a wildcard origin is both
@@ -350,6 +415,14 @@ class Settings(BaseSettings):
                 "RATE_LIMIT_ADMIN_WRITE_PER_MINUTE",
                 self.rate_limit_admin_write_per_minute,
             ),
+            (
+                "RATE_LIMIT_ONBOARDING_PER_HOUR",
+                self.rate_limit_onboarding_per_hour,
+            ),
+            (
+                "RATE_LIMIT_EMAIL_VERIFICATION_PER_HOUR",
+                self.rate_limit_email_verification_per_hour,
+            ),
         ):
             if value <= 0:
                 raise ValueError(f"{name} must be positive.")
@@ -401,6 +474,28 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CORS_ALLOWED_ORIGINS must use https:// in production; got "
                 f"{insecure!r}."
+            )
+
+        # The verification link this URL builds is emailed to whoever just
+        # typed a password into the signup form - the same "credentials
+        # must never cross the wire in cleartext" reasoning as the CORS
+        # check above.
+        if not self.public_app_url.startswith("https://"):
+            raise ValueError(
+                "PUBLIC_APP_URL must use https:// in production; got "
+                f"{self.public_app_url!r}."
+            )
+
+        # Unconfigured SMTP degrades to logging the onboarding email - link,
+        # token and all - at INFO (see `app.services.email.mailer`). That
+        # fallback exists for a bare local checkout; in production it would
+        # mean every admin's account-verification link lands in whatever
+        # aggregates the app's own logs.
+        if not self.smtp_host:
+            raise ValueError(
+                "SMTP_HOST must be set when ENVIRONMENT is 'production'; "
+                "without it, onboarding verification links are logged instead "
+                "of emailed."
             )
         return self
 

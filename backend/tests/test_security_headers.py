@@ -100,18 +100,21 @@ def test_headers_are_present_on_a_413(app_client: TestClient) -> None:
 
 
 def test_docs_get_a_relaxed_csp_and_still_render(app_client: TestClient) -> None:
-    """Swagger UI is a real HTML document that loads a script from a CDN.
+    """Swagger UI is a real HTML document that loads a script from a CDN and
+    mounts itself via a second, inline script FastAPI embeds directly.
 
-    The strict API policy would render a blank page, so the docs paths - and only
-    the docs paths - get a policy that permits it. Scripts are still restricted to
-    named origins, so an injected inline script is refused.
+    The strict API policy would render a blank page - not just from the missing
+    CDN allowance, but because a browser silently blocks that inline mounting
+    script without `'unsafe-inline'` on `script-src` too. Both relaxations are
+    scoped to exactly the documentation paths, so they cost nothing on any route
+    that carries data (see the `DOCS_CSP` docstring for why this is safe there).
     """
     response = app_client.get("/docs")
 
     assert response.status_code == 200
     assert response.headers["Content-Security-Policy"] == DOCS_CSP
     assert "cdn.jsdelivr.net" in response.headers["Content-Security-Policy"]
-    assert "'unsafe-inline'" not in DOCS_CSP.split("script-src")[1].split(";")[0]
+    assert "'unsafe-inline'" in DOCS_CSP.split("script-src")[1].split(";")[0]
     # The page really is the Swagger UI, not an empty shell.
     assert "swagger-ui" in response.text
 

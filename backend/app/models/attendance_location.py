@@ -52,6 +52,9 @@ class AttendanceLocation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Optional free-text address/description (PRD §7) - purely a
+    #: human-facing label, never read by presence verification.
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     latitude: Mapped[float] = mapped_column(Double, nullable=False)
     longitude: Mapped[float] = mapped_column(Double, nullable=False)
     geofence_radius_meters: Mapped[int] = mapped_column(

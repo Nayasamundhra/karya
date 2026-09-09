@@ -27,6 +27,7 @@ from app.core import rate_limit as rate_limit_module
 from app.core.config import settings
 from app.core.rate_limit import (
     FIFTEEN_MINUTES,
+    HOUR,
     MINUTE,
     InMemoryRateLimiter,
     RateLimitRule,
@@ -186,8 +187,10 @@ def test_expired_windows_are_swept(clock: FakeClock) -> None:
         swept.consume(f"key-{index}", RULE)
     assert len(swept._windows) == 100
 
-    # Past the longest configured window, then one more call to trigger the sweep.
-    clock.advance(FIFTEEN_MINUTES + 1)
+    # Past the longest configured window (Phase 11's onboarding/
+    # email_verification rules are the current longest, at one hour), then
+    # one more call to trigger the sweep.
+    clock.advance(HOUR + 1)
     swept.consume("trigger", RULE)
 
     assert len(swept._windows) == 1

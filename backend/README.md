@@ -25,7 +25,8 @@ and, in future, additional signals (Wi-Fi, device integrity, risk scoring).
 | **5** | Attendance history, daily summary, tenant dashboard APIs | ✅ Complete |
 | **6** | User, tenant and account management | ✅ Complete |
 | **7** | Production hardening & API readiness | ✅ Complete |
-| 8 | Frontend / PWA architecture | Not started |
+| 8–10 | Frontend / PWA architecture, staff attendance experience, manager/admin dashboards | ✅ Complete (see `frontend/`; `frontend/README.md` still describes only Phase 8) |
+| **11** | Tenant self-service onboarding, email verification, office-display (kiosk) mode | ✅ Complete |
 
 Phase 2 adds the identity and authorization layer every later feature depends
 on: Argon2id password hashing, JWT access tokens, revocable refresh tokens with
@@ -57,6 +58,22 @@ liveness/readiness probes, connection-pool and timeout management, graceful
 shutdown, a production container image, and error responses that cannot leak
 internals. It adds **no table**, and one migration that changes a single column
 *default* — see [§8f](#8f-production-hardening-phase-7).
+
+Phases 8–10 build the frontend on top of this API (routing, auth, PWA shell;
+the staff check-in/check-out experience; manager and admin dashboards) — see
+`frontend/CLAUDE.md`'s Frontend section, since none of it changes the backend.
+
+Phase 11 adds tenant self-service: an organization creates itself and its
+first administrator through the one public, unauthenticated write endpoint in
+the API (`POST /onboarding/tenants`), the administrator verifies by email
+before the account is usable at all, and a tenant can then set up its own
+attendance location and mint credentials for unattended office-display
+kiosks that show a self-refreshing check-in QR code with no phone or login
+involved. It adds four tables (`email_verification_tokens`, `display_tokens`,
+plus the migrations that add them and an `attendance_locations.description`
+column) and one dependency-free outbound-email mechanism (stdlib `smtplib`,
+degrading to a structured log line when `SMTP_HOST` is unset — see
+`app/services/email/mailer.py`).
 
 See [§10 — Not implemented yet](#10-what-is-intentionally-not-implemented-yet).
 
@@ -376,6 +393,14 @@ Authorized Operation        require_roles(...) + tenant_scoped_select(...)
 | `POST` | `/api/v1/users/{user_id}/activate` | TENANT_ADMIN | Reactivate (Phase 6) |
 | `POST` | `/api/v1/users/{user_id}/deactivate` | TENANT_ADMIN | Deactivate (Phase 6) |
 | `GET` | `/api/v1/users/{user_id}/audit` | TENANT_ADMIN | Lifecycle audit (Phase 6) |
+| `POST` | `/api/v1/onboarding/tenants` | — (public) | Create a tenant + its first (unverified) admin (Phase 11) |
+| `POST` | `/api/v1/onboarding/verify-email` | — (public, token in body) | Activate the admin and sign in (Phase 11) |
+| `POST` | `/api/v1/onboarding/resend-verification` | — (public) | Issue a fresh verification link (Phase 11) |
+| `GET`/`POST`/`PATCH` | `/api/v1/tenant/me/location` | Any active user / TENANT_ADMIN | Read / set up / update the tenant's attendance location (Phase 11) |
+| `POST`/`GET` | `/api/v1/tenant/display-tokens` | MANAGER / TENANT_ADMIN | Mint / list office-display kiosk credentials (Phase 11) |
+| `POST` | `/api/v1/tenant/display-tokens/{id}/revoke` | MANAGER / TENANT_ADMIN | Revoke a kiosk's credential (Phase 11) |
+| `POST` | `/api/v1/display/revoke-self` | — (display token, not a user) | A kiosk revokes its own credential (Phase 11) |
+| `POST` | `/api/v1/presence/qr/challenge/display` | — (display token, not a user) | A kiosk mints its own QR challenge (Phase 11) |
 
 All appear in the OpenAPI docs at `/docs`.
 
@@ -1435,10 +1460,13 @@ it introduced vulnerabilities of its own), the `Cross-Origin-*` isolation header
 (it constrains browser features a JSON response cannot use).
 
 `/docs` and `/redoc` get a **separate, looser CSP** — Swagger UI loads its script from
-a CDN and applies inline styles, so the strict policy would render a blank page. It is
-scoped to exactly those paths, and `script-src` still names its origins, so an
-injected inline script is still refused. `DOCS_ENABLED=false` turns the docs page and
-the schema off together, since they are one decision.
+a CDN, applies inline styles, and mounts itself via a second, inline script FastAPI's
+default docs HTML embeds directly, so the strict policy would render a blank page (the
+CDN script loads, but the inline one that actually renders the UI into the page gets
+silently blocked without `'unsafe-inline'` on `script-src` too). Both relaxations are
+scoped to exactly those paths, so they cost nothing on any route that carries data.
+`DOCS_ENABLED=false` turns the docs page and the schema off together, since they are
+one decision.
 
 ### Rate limiting, and what it honestly protects
 

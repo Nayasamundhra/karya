@@ -86,10 +86,17 @@ def authenticate_user(
     return user
 
 
-def _issue_token_pair(
+def issue_token_pair(
     session: Session, *, user: User, config: Settings | None = None
 ) -> TokenPair:
-    """Mint an access token plus a fresh refresh token for ``user``."""
+    """Mint an access token plus a fresh refresh token for ``user``.
+
+    Shared with `app.services.onboarding.service.verify_email`, which needs
+    the exact same "just-authenticated, give them a session" step once a
+    verification link is redeemed - not private to login/refresh anymore,
+    but still owned by this module since it is the one place a token pair is
+    minted.
+    """
     config = config or settings
     issued = refresh_token_store.issue_refresh_token(
         session, user=user, config=config
@@ -123,7 +130,7 @@ def login(
     user = authenticate_user(
         session, tenant_slug=tenant_slug, email=email, password=password
     )
-    return _issue_token_pair(session, user=user, config=config)
+    return issue_token_pair(session, user=user, config=config)
 
 
 def refresh(
@@ -154,7 +161,7 @@ def refresh(
         raise AuthenticationError
 
     refresh_token_store.revoke(record)
-    return _issue_token_pair(session, user=user, config=config)
+    return issue_token_pair(session, user=user, config=config)
 
 
 def logout(session: Session, *, raw_refresh_token: str) -> None:

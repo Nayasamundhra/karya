@@ -16,6 +16,8 @@ GOOD_SECRET = "a-sufficiently-long-test-secret-key-1234"
 PRODUCTION_BASE: dict[str, object] = {
     "environment": "production",
     "postgres_password": "a-real-production-password",
+    "smtp_host": "smtp.example.com",
+    "public_app_url": "https://app.karya.io",
 }
 
 
@@ -70,8 +72,7 @@ def test_secret_is_never_rendered_in_plain_text() -> None:
 
 
 def test_database_credentials_are_never_rendered_in_plain_text() -> None:
-    config = build(
-        environment="production",
+    config = build_production(
         jwt_secret_key=GOOD_SECRET,
         postgres_password="super-secret-db-password",
     )

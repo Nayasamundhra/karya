@@ -23,7 +23,11 @@ PHASE_1_TABLES = {
 #: Phase 2 added exactly one table: authentication state.
 PHASE_2_TABLES = {"refresh_tokens"}
 
-EXPECTED_TABLES = PHASE_1_TABLES | PHASE_2_TABLES
+#: Phase 11 added self-service onboarding (email verification) and the
+#: office-display kiosk mechanism (display tokens).
+PHASE_11_TABLES = {"email_verification_tokens", "display_tokens"}
+
+EXPECTED_TABLES = PHASE_1_TABLES | PHASE_2_TABLES | PHASE_11_TABLES
 
 #: Tables that are tenant-owned and therefore must carry tenant_id.
 TENANT_SCOPED_TABLES = {
@@ -33,6 +37,8 @@ TENANT_SCOPED_TABLES = {
     "attendance_events",
     "audit_logs",
     "refresh_tokens",
+    "email_verification_tokens",
+    "display_tokens",
 }
 
 #: (table, column) -> (referenced table, ON DELETE action)
@@ -49,6 +55,18 @@ EXPECTED_FOREIGN_KEYS = {
     # they cascade - unlike the attendance/audit rules above, left untouched.
     ("refresh_tokens", "user_id"): ("users", "CASCADE"),
     ("refresh_tokens", "tenant_id"): ("tenants", "CASCADE"),
+    # Phase 11. Verification tokens are authentication-adjacent ephemeral
+    # state, like refresh tokens - they cascade with their user/tenant.
+    ("email_verification_tokens", "user_id"): ("users", "CASCADE"),
+    ("email_verification_tokens", "tenant_id"): ("tenants", "CASCADE"),
+    # Display tokens are kiosk *configuration*, not a session - RESTRICT
+    # matches attendance_locations (a tenant with a live display cannot be
+    # deleted by accident). The creating admin alone is SET NULL, matching
+    # audit_logs.actor_user_id: the record of which kiosk exists must
+    # outlive whichever admin happened to set it up.
+    ("display_tokens", "tenant_id"): ("tenants", "RESTRICT"),
+    ("display_tokens", "location_id"): ("attendance_locations", "RESTRICT"),
+    ("display_tokens", "created_by_user_id"): ("users", "SET NULL"),
 }
 
 
@@ -131,6 +149,8 @@ def test_unique_constraints(db_session: Session) -> None:
         ("attendance_locations", "tenant_id"),
         ("qr_challenges", "nonce"),
         ("refresh_tokens", "token_hash"),
+        ("email_verification_tokens", "token_hash"),
+        ("display_tokens", "token_hash"),
     }
 
 
@@ -175,6 +195,17 @@ def test_required_indexes_exist(engine: Engine) -> None:
     # token_hash lookups ride the UNIQUE constraint's index.
     assert ("token_hash",) in tokens
 
+    # Phase 11.
+    verifications = indexed_column_sets("email_verification_tokens")
+    assert ("user_id",) in verifications
+    assert ("expires_at",) in verifications
+    assert ("token_hash",) in verifications
+
+    displays = indexed_column_sets("display_tokens")
+    assert ("tenant_id",) in displays
+    assert ("location_id",) in displays
+    assert ("token_hash",) in displays
+
 
 def test_active_refresh_token_index_is_partial(db_session: Session) -> None:
     """The active-session index must carry its WHERE clause."""
@@ -205,6 +236,18 @@ def test_refresh_tokens_store_no_raw_token_column(engine: Engine) -> None:
         "revoked_at",
         "created_at",
     }
+
+
+def test_verification_and_display_tokens_store_no_raw_token_column(
+    engine: Engine,
+) -> None:
+    """Same guarantee as `test_refresh_tokens_store_no_raw_token_column`,
+    extended to Phase 11's two new hashed-token tables."""
+    for table in ("email_verification_tokens", "display_tokens"):
+        columns = {c["name"] for c in inspect(engine).get_columns(table)}
+        assert "token_hash" in columns, table
+        assert "token" not in columns, table
+        assert "raw_token" not in columns, table
 
 
 def test_restrict_protects_attendance_data(db_session: Session) -> None:

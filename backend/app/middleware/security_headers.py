@@ -63,14 +63,20 @@ API_CSP: Final[str] = (
 )
 
 #: Policy for the interactive documentation. Swagger UI and ReDoc are served as
-#: HTML that loads its script and stylesheet from a CDN and applies inline styles,
-#: so the strict policy above would render a blank page. This is scoped to exactly
-#: the documentation paths, so relaxing it costs nothing on any route that carries
-#: data. ``'unsafe-inline'`` is limited to styles; scripts still must come from the
-#: named origins, so an injected inline script is still refused.
+#: HTML that loads its script and stylesheet from a CDN, applies inline styles,
+#: and - critically - mounts itself via a second, inline ``<script>`` block that
+#: FastAPI's default docs HTML embeds directly (it calls `SwaggerUIBundle({...})`
+#: to render into `#swagger-ui`). Without `'unsafe-inline'` on `script-src` too, a
+#: real browser downloads the CDN bundle fine but silently blocks that mounting
+#: script, leaving a permanently blank page - `curl` and a plain HTTP test can't
+#: see this, since neither executes JS or enforces CSP. Both relaxations are
+#: scoped to exactly the documentation paths, so this costs nothing on any route
+#: that carries data. Scripts must still come from the named origins or be inline;
+#: an attacker-controlled *response* (i.e. anything reflecting request data) is
+#: never one of these three doc pages, so this does not reopen the data routes.
 DOCS_CSP: Final[str] = (
     "default-src 'none'; "
-    "script-src 'self' https://cdn.jsdelivr.net; "
+    "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
     "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
     "img-src 'self' https://fastapi.tiangolo.com data:; "
     "font-src 'self' https://cdn.jsdelivr.net; "

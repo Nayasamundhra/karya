@@ -15,7 +15,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.display_deps import CurrentDisplay
 from app.api.limits import (
+    DISPLAY_QR_CHALLENGE_RATE_LIMIT,
     PRESENCE_RATE_LIMIT,
     QR_CHALLENGE_RATE_LIMIT,
     RATE_LIMITED_RESPONSE,
@@ -74,6 +76,49 @@ def create_qr_challenge(
             session,
             tenant_id=current_user.tenant_id,
             actor_user_id=current_user.id,
+        )
+    except NoActiveAttendanceLocationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_NO_LOCATION_DETAIL
+        ) from exc
+
+    session.commit()
+    return QRChallengeResponse(
+        challenge_id=challenge.id,
+        nonce=challenge.nonce,
+        expires_at=challenge.expires_at,
+        expires_in=ttl_seconds,
+    )
+
+
+@router.post(
+    "/qr/challenge/display",
+    response_model=QRChallengeResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Issue a short-lived QR challenge, authenticated as a kiosk display",
+    # Per display-token identity, not per user: this endpoint is never called
+    # with a user bearer token at all. See `app.api.display_deps`.
+    dependencies=[DISPLAY_QR_CHALLENGE_RATE_LIMIT],
+    responses={
+        401: {"description": "Not authenticated"},
+        409: {"description": _NO_LOCATION_DETAIL},
+        **RATE_LIMITED_RESPONSE,
+    },
+)
+def create_qr_challenge_for_display(
+    session: DbSession, display: CurrentDisplay
+) -> QRChallengeResponse:
+    """The same challenge-issuance endpoint above, for an unattended kiosk.
+
+    Identical response shape and identical underlying service call - only the
+    caller's identity differs. A display token identifies one tenant's one
+    physical screen, never a person, so the issued challenge is audited with
+    no actor rather than attributed to whichever admin happened to set the
+    kiosk up.
+    """
+    try:
+        challenge, ttl_seconds = presence_service.issue_qr_challenge(
+            session, tenant_id=display.tenant_id
         )
     except NoActiveAttendanceLocationError as exc:
         raise HTTPException(

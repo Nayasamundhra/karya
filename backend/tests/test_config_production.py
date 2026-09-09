@@ -17,6 +17,8 @@ from app.core.config import Environment, LogFormat, Settings
 
 GOOD_SECRET = "a-sufficiently-long-test-secret-key-1234"
 GOOD_PASSWORD = "a-real-production-password"
+GOOD_SMTP_HOST = "smtp.example.com"
+GOOD_PUBLIC_APP_URL = "https://app.karya.io"
 
 
 def build(**overrides: object) -> Settings:
@@ -31,6 +33,8 @@ def production(**overrides: object) -> Settings:
         "jwt_secret_key": GOOD_SECRET,
         "postgres_password": GOOD_PASSWORD,
         "debug": False,
+        "smtp_host": GOOD_SMTP_HOST,
+        "public_app_url": GOOD_PUBLIC_APP_URL,
     }
     return build(**{**base, **overrides})
 
@@ -144,6 +148,53 @@ def test_no_cors_origins_is_valid_in_production() -> None:
     assert production(cors_allowed_origins="").cors_origins == []
 
 
+def test_smtp_host_is_required_in_production() -> None:
+    """Without it, onboarding verification links are logged instead of emailed.
+
+    `app.services.email.mailer.send_email`'s unconfigured branch is a
+    deliberate local-dev convenience - it must not be reachable in
+    production, where "logged" means "shipped to whatever aggregates the
+    app's own logs," and the body it logs is an account-verification link.
+    """
+    with pytest.raises(ValidationError):
+        production(smtp_host=None)
+
+    # Unconfigured SMTP is the documented default everywhere else.
+    assert build(environment="local").smtp_host is None
+
+
+def test_public_app_url_must_be_https_in_production() -> None:
+    """The verification link this URL builds is emailed to a fresh signup's
+    password - the same cleartext-credentials reasoning as the CORS check."""
+    with pytest.raises(ValidationError):
+        production(public_app_url="http://app.karya.io")
+
+    # The default (http://localhost:5173) is fine locally, where it's the
+    # dev server's own origin.
+    assert build(environment="local").public_app_url == "http://localhost:5173"
+
+
+def test_public_app_url_trailing_slash_is_normalized_in_every_environment() -> None:
+    """`onboarding.service._verification_url` concatenates this value
+    directly into an emailed link - a stray trailing slash would silently
+    double into `.../org//onboarding/verify`."""
+    assert (
+        production(public_app_url="https://app.karya.io/").public_app_url
+        == "https://app.karya.io"
+    )
+    assert (
+        build(environment="local", public_app_url="http://localhost:5173/").public_app_url
+        == "http://localhost:5173"
+    )
+
+
+def test_public_app_url_requires_a_scheme_in_every_environment() -> None:
+    with pytest.raises(ValidationError):
+        build(environment="local", public_app_url="localhost:5173")
+    with pytest.raises(ValidationError):
+        build(environment="local", public_app_url="not a url")
+
+
 # ---------------------------------------------------------------------------
 # Operational limits (checked in every environment)
 # ---------------------------------------------------------------------------
@@ -176,6 +227,7 @@ def test_log_format_defaults_to_json() -> None:
         "max_query_string_bytes",
         "hsts_max_age_seconds",
         "rate_limit_max_tracked_keys",
+        "smtp_timeout_seconds",
     ],
 )
 def test_settings_that_must_be_positive(field: str) -> None:
@@ -211,6 +263,8 @@ def test_settings_where_zero_means_disabled(field: str) -> None:
         "rate_limit_presence_per_minute",
         "rate_limit_attendance_per_minute",
         "rate_limit_admin_write_per_minute",
+        "rate_limit_onboarding_per_hour",
+        "rate_limit_email_verification_per_hour",
     ],
 )
 def test_a_rate_limit_of_zero_is_rejected(field: str) -> None:

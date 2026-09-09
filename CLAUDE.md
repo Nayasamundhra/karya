@@ -12,23 +12,30 @@ below. Match whichever directory you're working in.
 ## Phased build — read before doing anything
 
 Karya is built in strictly-scoped phases, each handed over and reviewed one at a
-time. **Phases 1–8 are complete**: DB foundation → auth/RBAC → presence
+time. **Phases 1–11 are complete**: DB foundation → auth/RBAC → presence
 verification → attendance check-in/out → attendance reads → user/tenant
-management → production hardening → frontend/PWA architecture foundation.
-Phases 9 (staff attendance experience) and 10 (manager/admin dashboards) have
-not started.
+management → production hardening → frontend/PWA architecture foundation →
+staff attendance experience → manager/admin dashboards → tenant self-service
+onboarding, email verification and office-display (kiosk) mode. A frontend
+redesign (role-specific screens, a richer design system — see
+`frontend/docs/design-system.md` once it lands) is in progress on top of
+Phase 11; no phase past that is scoped yet.
 
-**Do not start Phase 9 or 10, or add anything from either backend's or
-frontend's "not implemented yet" list, unless explicitly asked.** On the
+(`backend/README.md`'s own phase table and `frontend/README.md` lag behind
+the actual state of the tree in places neither has been updated yet — trust
+this file and git history (`git log --oneline`) over either when they
+disagree.)
+
+**Do not start an unscoped future phase, or add anything from either backend's
+or frontend's "not implemented yet" list, unless explicitly asked.** On the
 backend: reports/CSV export, hours/overtime/analytics, leave/shift management,
 per-tenant timezones, password reset by email, a Redis rate limiter,
 `/metrics`/tracing, multiple attendance locations per tenant, or a
-`refresh_tokens` cleanup sweeper. On the frontend: the actual check-in/check-out
-screen, GPS+QR submission workflow, attendance history UI, or any
-manager/admin dashboard — `frontend/src/pages/{staff,manager,admin}/` currently
-hold only placeholder pages for exactly this reason. If a task sounds like it
-belongs to one of these, confirm scope with the user before adding it — the
-project owner ends each phase with an explicit stop instruction.
+`refresh_tokens` cleanup sweeper. On the frontend: offline attendance queueing,
+per-tenant configurable geofence UI, or anything else not already present in
+`src/features/` and `src/pages/`. If a task sounds like it belongs to one of
+these, confirm scope with the user before adding it — the project owner ends
+each phase with an explicit stop instruction.
 
 Within whatever is asked: match the existing depth of documentation (docstrings
 and comments explain *why*, not just *what*) and the existing test style
@@ -195,12 +202,14 @@ Starlette already runs each `def` endpoint in a worker thread.
   clears counters between tests) — a limiter that blocks a legitimate flow is
   exactly the regression the suite exists to catch, and it can't catch that
   disabled.
-- The two `*_concurrency.py` modules are the only ones that commit to the
-  database (real concurrency needs separate connections) and clean up their own
-  rows. Each also contains a deliberately naive implementation asserted to
-  *fail* under the same forced interleaving — so if the harness ever stops
-  creating real contention, that test fails rather than the suite quietly
-  passing. Follow this pattern for any new concurrency-sensitive invariant.
+- The three `*_concurrency.py` modules (`test_attendance_concurrency.py`,
+  `test_presence_concurrency.py`, `test_users_concurrency.py`) are the only
+  ones that commit to the database (real concurrency needs separate
+  connections) and clean up their own rows. Each also contains a deliberately
+  naive implementation asserted to *fail* under the same forced interleaving —
+  so if the harness ever stops creating real contention, that test fails
+  rather than the suite quietly passing. Follow this pattern for any new
+  concurrency-sensitive invariant.
 - `test_health.py` makes any DB access raise, to prove liveness never queries
   the database — a useful pattern if you add other infra-independent checks.
 - To verify a change end-to-end over HTTP (not just unit tests), use the
@@ -222,10 +231,13 @@ Prefer grepping those before re-deriving an answer from the code.
 
 # Frontend (`frontend/`)
 
-React 19 + TypeScript (`strict: true`) + Vite. A PWA foundation — routing,
-auth, design system, API client — for Phase 9/10 to build the real product on.
-See `frontend/README.md` for the full picture; this section is the short
-version plus the load-bearing decisions worth knowing before touching it.
+React 19 + TypeScript (`strict: true`) + Vite. Phase 8 built the PWA
+foundation — routing, auth, design system, API client; Phases 9 and 10 then
+built the real product on top of it: the staff check-in/check-out experience
+and the manager/admin dashboards. `frontend/README.md` still describes only
+the Phase 8 foundation (see the phased-build note above) — prefer the code and
+this section for anything about `features/attendance`, `features/team`, or
+`features/users/admin`.
 
 ## Commands
 
@@ -258,11 +270,20 @@ Business logic lives in `src/features/*` and `src/lib/*`, never in
 src/
 ├── app/            App.tsx, router.tsx, providers.tsx
 ├── components/     ui/ (design-system primitives) · layout/ (shell) · feedback/
-├── features/       auth/, users/, tenant/ — schemas, forms, API-backed hooks
-├── hooks/          useGeolocation, useCameraStream, useOnlineStatus, useInstallPrompt
+├── features/       auth/, tenant/ (+ tenant/'s own attendance-location
+│                   self-service), users/ (+ users/admin/ for employee
+│                   management), attendance/ (check-in/out flow, history),
+│                   team/ (manager "who's working today" views), onboarding/
+│                   (self-registration, email verification, setup checklist),
+│                   display/ (office-display kiosk token management + the
+│                   kiosk screen itself) — schemas, forms, API-backed hooks
+├── hooks/          useGeolocation, useCameraStream, useOnlineStatus,
+│                   useInstallPrompt, useDebouncedValue
 ├── lib/            api/ (client + typed endpoints) · auth/ (session/tokens) ·
 │                   errors/ (describeError) · pwa/ · validation/ · utils/
-├── pages/          auth/, staff/, manager/, admin/ — one file per route
+├── pages/          auth/, staff/, manager/, admin/, onboarding/, display/ —
+│                   one file per route, thin wrappers around the
+│                   corresponding features/ module
 ├── routes/         guards.tsx (RequireAuth, RequireRole)
 ├── stores/         authStore.ts, toastStore.ts — the only two Zustand stores
 ├── types/          api.generated.ts (OpenAPI codegen — never hand-edited)
@@ -322,7 +343,9 @@ each test covers and why: `frontend/docs/testing.md`.
 
 ## Where to look for more detail
 
-`frontend/README.md` for setup and full project layout; `frontend/docs/*.md`
-for the "why" behind auth, PWA/service-worker strategy, API codegen, error
-handling, performance, and testing — each referenced directly from the code
-comments they document.
+`frontend/README.md` for setup and project layout (Phase 8 state only — see
+the phased-build note above for what it misses); `frontend/docs/*.md` for the
+"why" behind auth, PWA/service-worker strategy, API codegen, error handling,
+performance (`performance.md`, added in Phase 9/10, tracks real production
+bundle sizes per route chunk), and testing — each referenced directly from the
+code comments they document.
