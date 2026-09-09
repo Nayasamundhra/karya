@@ -11,3 +11,12 @@ export const PASSWORD_MAX_LENGTH = 128
 export const NAME_MAX_LENGTH = 255
 export const EMPLOYEE_CODE_MAX_LENGTH = 100
 export const SLUG_MAX_LENGTH = 100
+export const TENANT_NAME_MAX_LENGTH = 255
+// Mirrors `attendance_locations.description VARCHAR(500)`.
+export const LOCATION_DESCRIPTION_MAX_LENGTH = 500
+
+// Mirrors `backend/app/schemas/onboarding.py`'s `_SLUG_PATTERN`: starts and
+// ends with a letter/digit, hyphens only in between, never doubled at the
+// edges. Client-side check is a fast-feedback convenience only — the
+// backend re-validates regardless (§27).
+export const TENANT_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/

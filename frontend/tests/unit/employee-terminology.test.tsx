@@ -15,16 +15,47 @@ import { useAuthStore } from '@/stores/authStore'
 import type { AttendanceTodayResponse } from '@/lib/api/types'
 import { TestQueryProvider } from './helpers/testQueryClient'
 
-const { getTeamToday } = vi.hoisted(() => ({ getTeamToday: vi.fn() }))
+const { getTeamToday, getMyAttendance, getMyHistory } = vi.hoisted(() => ({
+  getTeamToday: vi.fn(),
+  // HomePage's STAFF path (`EmployeeHome`) fetches live attendance data.
+  getMyAttendance: vi.fn().mockResolvedValue({
+    user_id: 'user-1',
+    state: 'NOT_CHECKED_IN',
+    day: { date: '2026-08-22', status: 'NO_RECORD', sessions: [], first_check_in: null, last_check_out: null },
+  }),
+  getMyHistory: vi.fn().mockResolvedValue({
+    user_id: 'user-1',
+    from_date: '2026-08-16',
+    to_date: '2026-08-22',
+    items: [],
+    pagination: { page: 1, page_size: 7, total: 0, total_pages: 0 },
+  }),
+}))
 const { listUsers } = vi.hoisted(() => ({ listUsers: vi.fn() }))
+const { getOwnTenant } = vi.hoisted(() => ({
+  getOwnTenant: vi.fn().mockResolvedValue({
+    id: 'tenant-1',
+    name: 'Acme Co',
+    slug: 'acme',
+    status: 'ACTIVE',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  }),
+}))
 
 vi.mock('@/lib/api/endpoints/attendance', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api/endpoints/attendance')>()),
   getTeamToday,
+  getMyAttendance,
+  getMyHistory,
 }))
 vi.mock('@/lib/api/endpoints/users', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api/endpoints/users')>()),
   listUsers,
+}))
+vi.mock('@/lib/api/endpoints/tenant', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/endpoints/tenant')>()),
+  getOwnTenant,
 }))
 
 function rendersNoBareStaffWord(container: HTMLElement) {
@@ -34,7 +65,7 @@ function rendersNoBareStaffWord(container: HTMLElement) {
 }
 
 describe('Employee terminology', () => {
-  it('HomePage greets a STAFF-role user as "Employee", not "Staff"', () => {
+  it('HomePage greets a STAFF-role user as "Employee", not "Staff"', async () => {
     useAuthStore.setState({
       status: 'authenticated',
       user: {
@@ -56,7 +87,14 @@ describe('Employee terminology', () => {
       </TestQueryProvider>,
     )
 
-    expect(screen.getByText(/signed in as employee/i)).toBeInTheDocument()
+    expect(
+      await screen.findByRole('heading', { name: /good (morning|afternoon|evening), riya/i }),
+    ).toBeInTheDocument()
+    // Drain EmployeeHome's mocked attendance/history queries within this
+    // test's own act() boundary, rather than leaving them pending to
+    // resolve during whichever test runs next (see routing.test.tsx).
+    await screen.findByText(/checked in at|haven.t checked in/i)
+    await screen.findByText('This week')
     rendersNoBareStaffWord(container)
   })
 

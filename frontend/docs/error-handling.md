@@ -13,7 +13,7 @@ inspect an HTTP status code or a `fetch` rejection directly.
 | — (network failure) | `network` | "Can't reach Karya" | ✅ |
 | — (client timeout) | `timeout` | "That took too long" | ✅ |
 | — (aborted) | `cancelled` | (usually invisible — a superseded search/route change) | ❌ |
-| 401 | `unauthorized` | "Your session has expired" *(except the login form itself — see below)* | ❌, redirect to `/login` |
+| 401 | `unauthorized` | "Your session has expired" *(except the login form and email verification — see below)* | ❌, redirect to `/login` |
 | 403 | `forbidden` | "You don't have permission" | ❌ |
 | 404 | `not_found` | "Not found" | ❌ |
 | 409 | `conflict` | Backend's own message (already safe/specific — e.g. "A user with that email already exists") | ❌ |
@@ -23,7 +23,7 @@ inspect an HTTP status code or a `fetch` rejection directly.
 | 503 | `unavailable` | "Service temporarily unavailable" | ✅ |
 | anything else | `unknown` | Generic fallback | ✅ |
 
-## The one deliberate exception: login's 401
+## The deliberate exceptions: login's and verification's 401
 
 `describeError`'s generic 401 copy ("Your session has expired, sign in
 again") is correct for an authenticated screen whose token died mid-session.
@@ -34,10 +34,19 @@ this one kind, on this one screen, to show the backend's own message
 because that message is *already* the deliberately generic, anti-enumeration
 text the backend's own design requires (see backend README §8a: the same
 401 for an unknown tenant, an unknown user, a wrong password, and a
-deactivated account). This is the only place in the frontend that overrides
-the shared mapping, and it's called out explicitly in
-`src/features/auth/LoginForm.tsx` so it doesn't look like a copy-paste
-mistake later.
+deactivated account).
+
+`VerifyEmailPage.tsx` makes the same exception for the same reason, one level
+removed: a rejected onboarding verification link (missing, expired, or
+already used — Phase 11) is a 401 too, but again never had a "session" to
+expire. It shows the backend's own message ("This verification link is
+invalid or has expired") verbatim, which is safe for the same
+anti-enumeration reason (see backend `onboarding.py`).
+
+These are the only two places in the frontend that override the shared
+mapping, and each is called out explicitly at its own call site
+(`src/features/auth/LoginForm.tsx`, `src/pages/onboarding/VerifyEmailPage.tsx`)
+so neither looks like a copy-paste mistake later.
 
 ## Never surfaced to the user
 

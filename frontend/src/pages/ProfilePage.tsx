@@ -5,12 +5,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs'
 import { ChangePasswordForm } from '@/features/auth/ChangePasswordForm'
 import { useOwnProfile } from '@/features/users/useOwnProfile'
 import { ProfileForm } from '@/features/users/ProfileForm'
-import { TenantSettingsCard } from '@/features/tenant/TenantSettingsCard'
-import { useAuth } from '@/features/auth/useAuth'
 
 export default function ProfilePage() {
   const { data: user, isLoading, isError, error, refetch } = useOwnProfile()
-  const { hasRole } = useAuth()
 
   return (
     <div className="flex max-w-2xl flex-col gap-6">
@@ -33,7 +30,6 @@ export default function ProfilePage() {
           <TabsList>
             <TabsTrigger value="profile">Profile</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
-            {hasRole('TENANT_ADMIN') && <TabsTrigger value="organization">Organization</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="profile">
@@ -57,12 +53,6 @@ export default function ProfilePage() {
               </CardContent>
             </Card>
           </TabsContent>
-
-          {hasRole('TENANT_ADMIN') && (
-            <TabsContent value="organization">
-              <TenantSettingsCard />
-            </TabsContent>
-          )}
         </Tabs>
       )}
     </div>

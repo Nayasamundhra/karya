@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom'
 
 import { useAuth } from '@/features/auth/useAuth'
 import { navItemsForRole } from '@/config/navigation'
+import { roleNavClasses } from '@/config/roleAccent'
 import { cn } from '@/lib/utils/cn'
 
 /** Desktop only (`hidden lg:flex` — see AppShell). Mobile uses `BottomNav` +
@@ -9,6 +10,7 @@ import { cn } from '@/lib/utils/cn'
 export function Sidebar() {
   const { user } = useAuth()
   const items = navItemsForRole(user?.role)
+  const { sidebarActive } = roleNavClasses(user?.role)
 
   return (
     <nav
@@ -29,7 +31,7 @@ export function Sidebar() {
           className={({ isActive }) =>
             cn(
               'flex min-h-11 items-center gap-3 rounded-md px-3 text-sm font-medium text-foreground-muted hover:bg-surface-sunken hover:text-foreground',
-              isActive && 'bg-accent-50 text-accent-700 hover:bg-accent-50 hover:text-accent-700',
+              isActive && sidebarActive,
             )
           }
         >

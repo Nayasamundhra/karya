@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 
 import { navItemsForRole } from '@/config/navigation'
+import { roleNavClasses } from '@/config/roleAccent'
 import { useAuth } from '@/features/auth/useAuth'
 import { cn } from '@/lib/utils/cn'
 
@@ -9,6 +10,7 @@ import { cn } from '@/lib/utils/cn'
 export function BottomNav() {
   const { user } = useAuth()
   const items = navItemsForRole(user?.role).filter((item) => item.showInBottomNav)
+  const { bottomNavActive } = roleNavClasses(user?.role)
 
   return (
     <nav
@@ -24,7 +26,7 @@ export function BottomNav() {
           className={({ isActive }) =>
             cn(
               'flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-xs font-medium text-foreground-muted',
-              isActive && 'text-accent-600',
+              isActive && bottomNavActive,
             )
           }
         >

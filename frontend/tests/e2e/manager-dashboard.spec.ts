@@ -65,6 +65,76 @@ async function mockAuth(page: import('@playwright/test').Page, role: 'MANAGER' |
       }),
     })
   })
+  // A TENANT_ADMIN landing on Home renders `SetupNudge`, which reads
+  // `useSetupStatus` — three more requests with nothing here to answer
+  // them otherwise (no backend runs in this e2e project; an unmocked
+  // request just fails against an unreachable host, but leaves the query
+  // retrying in the background rather than settling quickly). Mocked as
+  // already-complete so the nudge doesn't render at all and none of this
+  // spec's assertions have to account for it.
+  await page.route('**/api/v1/tenant/me/location', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'loc-1',
+        name: 'HQ',
+        description: null,
+        latitude: 12.9716,
+        longitude: 77.5946,
+        geofence_radius_meters: 150,
+        status: 'ACTIVE',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      }),
+    })
+  })
+  await page.route('**/api/v1/tenant/display-tokens', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [{ id: 'disp-1', label: 'Lobby', created_at: '2026-01-01T00:00:00Z', last_used_at: null, revoked_at: null }],
+      }),
+    })
+  })
+  await page.route('**/api/v1/users?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [],
+        pagination: { page: 1, page_size: 2, total: 2, total_pages: 1 },
+      }),
+    })
+  })
+  // A STAFF user landing on Home renders `EmployeeHome`, which fetches live
+  // attendance data — same reasoning as the setup-status mocks above.
+  await page.route('**/api/v1/attendance/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        user_id: 'user-1',
+        state: 'NOT_CHECKED_IN',
+        day: { date: '2026-01-05', status: 'NO_RECORD', sessions: [], first_check_in: null, last_check_out: null },
+      }),
+    })
+  })
+  await page.route('**/api/v1/attendance/me/history**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        user_id: 'user-1',
+        from_date: '2025-12-30',
+        to_date: '2026-01-05',
+        items: [],
+        pagination: { page: 1, page_size: 7, total: 0, total_pages: 0 },
+      }),
+    })
+  })
 }
 
 async function login(page: import('@playwright/test').Page) {

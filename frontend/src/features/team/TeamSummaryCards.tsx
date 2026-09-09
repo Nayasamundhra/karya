@@ -14,7 +14,7 @@ export function TeamSummaryCards({ summary }: { summary: TeamAttendanceResponse[
   ]
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div role="group" aria-label="Team summary" className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       {cards.map((card) => (
         <Card key={card.label}>
           <CardContent className="flex flex-col gap-1 p-4">

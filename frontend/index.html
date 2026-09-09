@@ -15,6 +15,18 @@
     <meta name="apple-mobile-web-app-title" content="Karya" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
 
+    <!-- The token file has named 'Inter' as the body face since Phase 8, but
+         nothing ever loaded it — every render silently fell through to the
+         OS's own sans-serif. This actually loads it, plus 'Outfit' for the
+         redesign's large hero moments (a check-in timer, the kiosk clock) —
+         see styles/index.css's --font-display. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+
     <title>Karya</title>
   </head>
   <body>

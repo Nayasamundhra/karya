@@ -145,6 +145,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/onboarding/tenants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a new organization and its first administrator
+         * @description Create a tenant and its first (unverified) TENANT_ADMIN.
+         *
+         *     The new account cannot sign in until the emailed verification link is
+         *     followed - see ``POST /onboarding/verify-email``. Nothing about the new
+         *     account is returned here beyond the slug the admin will log in with;
+         *     there is no token to hand back, since the account is not usable yet.
+         */
+        post: operations["create_tenant_api_v1_onboarding_tenants_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboarding/verify-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify an onboarding email address and sign in
+         * @description Activate the account behind a verification token and sign it in.
+         *
+         *     Returns the same token pair shape as ``POST /auth/login`` - the person
+         *     who just proved they own this email address is, at this exact moment,
+         *     as authenticated as anyone who just typed a correct password, so there
+         *     is no reason to make them do that too.
+         *
+         *     401, not 404 or 410: a token that never existed, one already consumed,
+         *     and one that expired are all indistinguishable to the caller, the same
+         *     anti-enumeration posture login itself uses for credentials.
+         */
+        post: operations["verify_email_api_v1_onboarding_verify_email_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboarding/resend-verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resend an onboarding verification email
+         * @description Issue a fresh verification link for a lost or expired one.
+         *
+         *     Always returns the same message and 200, whether or not an email was
+         *     actually sent - see
+         *     :func:`app.services.onboarding.service.resend_verification_email` for
+         *     why. Shares `verify-email`'s rate-limit budget: both are unauthenticated,
+         *     per-IP, identity-guessing-shaped actions.
+         *
+         *     The one exception to "always 200" is the mail server itself being
+         *     unreachable (`EmailDeliveryError`) - that failure is identical no matter
+         *     which organization/email was requested, so surfacing it as a 503 leaks
+         *     nothing about whether the account exists.
+         */
+        post: operations["resend_verification_api_v1_onboarding_resend_verification_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/presence/qr/challenge": {
         parameters: {
             query?: never;
@@ -164,6 +249,32 @@ export interface paths {
          *     expected to re-request one shortly before it lapses.
          */
         post: operations["create_qr_challenge_api_v1_presence_qr_challenge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/presence/qr/challenge/display": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a short-lived QR challenge, authenticated as a kiosk display
+         * @description The same challenge-issuance endpoint above, for an unattended kiosk.
+         *
+         *     Identical response shape and identical underlying service call - only the
+         *     caller's identity differs. A display token identifies one tenant's one
+         *     physical screen, never a person, so the issued challenge is audited with
+         *     no actor rather than attributed to whichever admin happened to set the
+         *     kiosk up.
+         */
+        post: operations["create_qr_challenge_for_display_api_v1_presence_qr_challenge_display_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -619,6 +730,121 @@ export interface paths {
         patch: operations["update_own_tenant_api_v1_tenant_me_patch"];
         trace?: never;
     };
+    "/api/v1/tenant/me/location": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's own attendance location
+         * @description Return the tenant's attendance location, if one has been set up.
+         *
+         *     Open to any active user, like ``GET /tenant/me`` - the office address and
+         *     geofence radius are operational context, not privileged configuration.
+         */
+        get: operations["read_own_location_api_v1_tenant_me_location_get"];
+        put?: never;
+        /**
+         * Set up the caller's attendance location
+         * @description Create the tenant's one attendance location.
+         *
+         *     Karya V1 supports exactly one per tenant (see
+         *     `app.models.attendance_location`); call ``PATCH`` instead once one
+         *     exists. Without this, check-in/out can never succeed for a fresh
+         *     tenant - GPS verification has no geofence to test against.
+         */
+        post: operations["create_own_location_api_v1_tenant_me_location_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update the caller's attendance location
+         * @description Update the tenant's existing attendance location.
+         */
+        patch: operations["update_own_location_api_v1_tenant_me_location_patch"];
+        trace?: never;
+    };
+    "/api/v1/tenant/display-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List this tenant's office-display kiosks
+         * @description Never includes a raw token - only what was true at creation time plus
+         *     each kiosk's revocation/heartbeat state, enough to decide which to revoke.
+         */
+        get: operations["list_display_tokens_api_v1_tenant_display_tokens_get"];
+        put?: never;
+        /**
+         * Mint a credential for one office-display kiosk
+         * @description Mint a new kiosk credential. The raw token is returned exactly once.
+         *
+         *     Store it in the kiosk's browser immediately - there is no way to
+         *     retrieve it again, only to revoke it and mint a replacement.
+         */
+        post: operations["create_display_token_api_v1_tenant_display_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tenant/display-tokens/{display_token_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke one office-display kiosk's credential
+         * @description Immediately and permanently disable one kiosk's credential.
+         *
+         *     404, not 403, for a display token belonging to another tenant - the same
+         *     "cross-tenant lookups don't exist" posture every other admin route uses.
+         */
+        post: operations["revoke_display_token_api_v1_tenant_display_tokens__display_token_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/display/revoke-self": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A kiosk revokes its own credential
+         * @description Let a kiosk disable itself - the "Reset this display" control.
+         *
+         *     Deliberately narrow: a display token can revoke only the one row its own
+         *     token identifies (`display.display_token_id`, derived from the token
+         *     itself, never a request parameter - the same "identity is derived, not
+         *     accepted" posture every tenant-scoped route already uses), so a leaked
+         *     display token gains no capability beyond killing itself. There is no
+         *     "un-revoke" - a reset kiosk needs a freshly minted token from an admin,
+         *     same as any other revoked display.
+         */
+        post: operations["revoke_self_api_v1_display_revoke_self_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -729,6 +955,71 @@ export interface components {
             pagination: components["schemas"]["PaginationResponse"];
         };
         /**
+         * AttendanceLocationCreateRequest
+         * @description Body for ``POST /api/v1/tenant/me/location``. Fails 409 if one exists.
+         */
+        AttendanceLocationCreateRequest: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /**
+             * Geofence Radius Meters
+             * @default 150
+             */
+            geofence_radius_meters: number;
+        };
+        /** AttendanceLocationResponse */
+        AttendanceLocationResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Geofence Radius Meters */
+            geofence_radius_meters: number;
+            /** Status */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * AttendanceLocationUpdateRequest
+         * @description Body for ``PATCH /api/v1/tenant/me/location``. Fails 404 if none exists.
+         */
+        AttendanceLocationUpdateRequest: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Latitude */
+            latitude?: number | null;
+            /** Longitude */
+            longitude?: number | null;
+            /** Geofence Radius Meters */
+            geofence_radius_meters?: number | null;
+        };
+        /**
          * AttendanceSessionResponse
          * @description One check-in/check-out pair.
          *
@@ -790,6 +1081,66 @@ export interface components {
          * @enum {string}
          */
         DayStatus: "NO_RECORD" | "CHECKED_IN" | "COMPLETED";
+        /** DisplayTokenCreateRequest */
+        DisplayTokenCreateRequest: {
+            /** Label */
+            label: string;
+        };
+        /**
+         * DisplayTokenCreateResponse
+         * @description Returned once, on creation. The raw token is never retrievable again.
+         */
+        DisplayTokenCreateResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+            /** Token */
+            token: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** DisplayTokenListResponse */
+        DisplayTokenListResponse: {
+            /** Items */
+            items: components["schemas"]["DisplayTokenResponse"][];
+        };
+        /**
+         * DisplayTokenResponse
+         * @description One row in the listing - never the raw token.
+         */
+        DisplayTokenResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Last Used At */
+            last_used_at: string | null;
+            /** Revoked At */
+            revoked_at: string | null;
+        };
+        /**
+         * EmailVerificationRequest
+         * @description Body for ``POST /api/v1/onboarding/verify-email``.
+         */
+        EmailVerificationRequest: {
+            /** Token */
+            token: string;
+        };
         /**
          * FailureReason
          * @description Why a presence attempt was rejected.
@@ -983,6 +1334,35 @@ export interface components {
             refresh_token: string;
         };
         /**
+         * ResendVerificationRequest
+         * @description Body for ``POST /api/v1/onboarding/resend-verification``.
+         *
+         *     Identifies the account the same way login does - organization slug plus
+         *     email - rather than a stale token, since the whole point is recovering
+         *     from a link that's gone missing or expired.
+         */
+        ResendVerificationRequest: {
+            /** Organization Slug */
+            organization_slug: string;
+            /**
+             * Admin Email
+             * Format: email
+             */
+            admin_email: string;
+        };
+        /**
+         * ResendVerificationResponse
+         * @description Always the same message, whether or not anything was actually sent -
+         *     see :func:`app.services.onboarding.service.resend_verification_email`.
+         */
+        ResendVerificationResponse: {
+            /**
+             * Message
+             * @default If that account needs verifying, we've sent a new link.
+             */
+            message: string;
+        };
+        /**
          * RoleUpdateRequest
          * @description A role change, on its own dedicated endpoint.
          */
@@ -1054,6 +1434,46 @@ export interface components {
             checked_in: number;
             /** Completed */
             completed: number;
+        };
+        /**
+         * TenantOnboardingRequest
+         * @description Body for ``POST /api/v1/onboarding/tenants``.
+         *
+         *     Creates a new tenant and its first administrator in one transaction. The
+         *     administrator is created ``INACTIVE`` and cannot sign in until the email
+         *     address is verified - see
+         *     :func:`app.services.onboarding.service.create_tenant_with_admin`.
+         */
+        TenantOnboardingRequest: {
+            /** Organization Name */
+            organization_name: string;
+            /** Organization Slug */
+            organization_slug: string;
+            /** Admin Name */
+            admin_name: string;
+            /**
+             * Admin Email
+             * Format: email
+             */
+            admin_email: string;
+            /**
+             * Admin Password
+             * Format: password
+             */
+            admin_password: string;
+        };
+        /**
+         * TenantOnboardingResponse
+         * @description Deliberately carries no token: the account is not usable yet.
+         */
+        TenantOnboardingResponse: {
+            /** Organization Slug */
+            organization_slug: string;
+            /**
+             * Message
+             * @default Check your email to verify your account before signing in.
+             */
+            message: string;
         };
         /**
          * TenantResponse
@@ -1546,6 +1966,152 @@ export interface operations {
             };
         };
     };
+    create_tenant_api_v1_onboarding_tenants_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TenantOnboardingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantOnboardingResponse"];
+                };
+            };
+            /** @description That organization ID is already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Could not send the verification email right now. Try again shortly. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    verify_email_api_v1_onboarding_verify_email_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            /** @description This verification link is invalid or has expired */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    resend_verification_api_v1_onboarding_resend_verification_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResendVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResendVerificationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Could not send the verification email right now. Try again shortly. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     create_qr_challenge_api_v1_presence_qr_challenge_post: {
         parameters: {
             query?: never;
@@ -1566,6 +2132,47 @@ export interface operations {
             };
             /** @description Insufficient permissions */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active attendance location is configured */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_qr_challenge_for_display_api_v1_presence_qr_challenge_display_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QRChallengeResponse"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2650,6 +3257,308 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    read_own_location_api_v1_tenant_me_location_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttendanceLocationResponse"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No attendance location is configured yet */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_own_location_api_v1_tenant_me_location_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttendanceLocationCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttendanceLocationResponse"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An attendance location already exists for this tenant */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_own_location_api_v1_tenant_me_location_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttendanceLocationUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttendanceLocationResponse"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No attendance location is configured yet */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_display_tokens_api_v1_tenant_display_tokens_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DisplayTokenListResponse"];
+                };
+            };
+        };
+    };
+    create_display_token_api_v1_tenant_display_tokens_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DisplayTokenCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DisplayTokenCreateResponse"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Set up your attendance location before creating a display */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revoke_display_token_api_v1_tenant_display_tokens__display_token_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                display_token_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DisplayTokenResponse"];
+                };
+            };
+            /** @description No such display token */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revoke_self_api_v1_display_revoke_self_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DisplayTokenResponse"];
                 };
             };
             /** @description Too many requests */

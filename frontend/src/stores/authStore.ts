@@ -30,6 +30,17 @@ interface AuthState {
   accessToken: string | null
   accessTokenExpiresAt: number | null
   setSession: (params: { user: UserResponse; accessToken: string; expiresInSeconds: number }) => void
+  /**
+   * Store a freshly-issued access token without touching `status`/`user`.
+   * Needed because `login()`/`bootstrapSession()` (in `lib/auth/session.ts`)
+   * must call `/auth/me` to learn *who* signed in before they can call
+   * `setSession` — but `apiFetch` reads this store's `accessToken` to attach
+   * the `Authorization` header, so without this the token from
+   * login/refresh would never make it onto that first `/auth/me` request.
+   * `status` deliberately stays `'loading'` until `setSession` follows, so
+   * route guards see no behaviour change from this alone.
+   */
+  setAccessToken: (accessToken: string, expiresInSeconds: number) => void
   setUser: (user: UserResponse) => void
   clearSession: () => void
 }
@@ -47,6 +58,9 @@ export const useAuthStore = create<AuthState>((set) => ({
       accessToken,
       accessTokenExpiresAt: Date.now() + expiresInSeconds * 1000,
     }),
+
+  setAccessToken: (accessToken, expiresInSeconds) =>
+    set({ accessToken, accessTokenExpiresAt: Date.now() + expiresInSeconds * 1000 }),
 
   setUser: (user) => set({ user }),
 

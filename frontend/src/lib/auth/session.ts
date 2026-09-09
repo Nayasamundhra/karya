@@ -12,6 +12,7 @@ import * as authApi from '@/lib/api/endpoints/auth'
 import { configureApiAuth } from '@/lib/api/client'
 import { isApiError } from '@/lib/api/errors'
 import { clearRefreshToken, loadRefreshToken, saveRefreshToken } from '@/lib/auth/tokenStorage'
+import type { TokenResponse } from '@/lib/api/types'
 import { useAuthStore } from '@/stores/authStore'
 
 // Listeners for "the session just ended" (logout, expiry, or a rejected
@@ -77,6 +78,11 @@ export async function bootstrapSession(): Promise<void> {
   try {
     const tokens = await authApi.refresh({ refresh_token: refreshToken })
     saveRefreshToken(tokens.refresh_token)
+    // Must land before `me()`: `apiFetch` attaches `Authorization` from this
+    // store, and `setSession` (which needs the user `me()` returns) can't run
+    // until after that call resolves. Without this, `/auth/me` goes out with
+    // no bearer token at all — see `setAccessToken`'s docstring.
+    useAuthStore.getState().setAccessToken(tokens.access_token, tokens.expires_in)
     const user = await authApi.me()
     useAuthStore.getState().setSession({
       user,
@@ -102,6 +108,28 @@ export async function login(params: LoginParams): Promise<void> {
     password: params.password,
   })
   saveRefreshToken(tokens.refresh_token)
+  // Same ordering requirement as `bootstrapSession` above: store the token
+  // before the `/auth/me` call that needs to send it as a bearer header.
+  useAuthStore.getState().setAccessToken(tokens.access_token, tokens.expires_in)
+  const user = await authApi.me()
+  useAuthStore.getState().setSession({
+    user,
+    accessToken: tokens.access_token,
+    expiresInSeconds: tokens.expires_in,
+  })
+}
+
+/**
+ * Establish a session from a token pair obtained some way other than
+ * `POST /auth/login` - today, exactly one caller: onboarding's
+ * `POST /onboarding/verify-email`, which mints a token pair the moment a
+ * verification link is redeemed (see `app.api.v1.onboarding.verify_email`).
+ * Shares every step `login()` takes after it has tokens in hand, so the two
+ * flows can never drift on "what does a freshly authenticated session need".
+ */
+export async function establishSessionFromTokens(tokens: TokenResponse): Promise<void> {
+  saveRefreshToken(tokens.refresh_token)
+  useAuthStore.getState().setAccessToken(tokens.access_token, tokens.expires_in)
   const user = await authApi.me()
   useAuthStore.getState().setSession({
     user,

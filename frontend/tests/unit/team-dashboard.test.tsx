@@ -76,9 +76,18 @@ describe('TeamPage (manager dashboard)', () => {
     getTeamToday.mockResolvedValue(teamResponse())
     renderTeamPage()
 
-    expect(await screen.findByText('Total Employees')).toBeInTheDocument()
-    expect(screen.getByText('3')).toBeInTheDocument() // total
-    expect(screen.getAllByText('1')).toHaveLength(3) // checked_in, completed, no_record
+    // Scoped to the four-card breakdown (`role="group"`) — the new headline
+    // above it (`TeamHeadline`) reads the same backend numbers into its own
+    // "1 of 3 checked in" summary, which would otherwise collide with these
+    // exact-text assertions.
+    const summary = await screen.findByRole('group', { name: 'Team summary' })
+    expect(within(summary).getByText('Total Employees')).toBeInTheDocument()
+    expect(within(summary).getByText('3')).toBeInTheDocument() // total
+    expect(within(summary).getAllByText('1')).toHaveLength(3) // checked_in, completed, no_record
+
+    // The headline reads the same backend-reported number, not a second,
+    // possibly-drifting computation.
+    expect(screen.getByText('of 3 checked in')).toBeInTheDocument()
   })
 
   it('lists every employee with name, code, status, check-in and check-out', async () => {
@@ -118,7 +127,7 @@ describe('TeamPage (manager dashboard)', () => {
     })
     renderTeamPage()
 
-    expect(await screen.findByText('No employees match this filter')).toBeInTheDocument()
+    expect(await screen.findByText('No employees match')).toBeInTheDocument()
   })
 
   it('navigates to the employee detail route on row click', async () => {

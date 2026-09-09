@@ -16,7 +16,7 @@ describe('navItemsForRole', () => {
 
   it('gives TENANT_ADMIN every tenant-scoped item, but SUPER_ADMIN is never granted any item implicitly', () => {
     const adminIds = navItemsForRole('TENANT_ADMIN').map((item) => item.id)
-    expect(adminIds).toEqual(['home', 'attendance', 'team', 'admin-users', 'profile'])
+    expect(adminIds).toEqual(['home', 'attendance', 'team', 'admin-users', 'admin-organization', 'profile'])
 
     // SUPER_ADMIN is a platform role Karya's tenant-scoped app never grants
     // anything to implicitly (mirrors the backend's require_roles design —

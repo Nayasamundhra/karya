@@ -6,7 +6,9 @@
  * page; filtering and navigation to an employee's detail happen client-side.
  */
 import { ErrorState } from '@/components/feedback/ErrorState'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { TeamAttendanceTable } from '@/features/team/TeamAttendanceTable'
+import { TeamHeadline } from '@/features/team/TeamHeadline'
 import { TeamSummaryCards, TeamSummaryCardsSkeleton } from '@/features/team/TeamSummaryCards'
 import { useTeamToday } from '@/features/team/useTeamToday'
 
@@ -20,11 +22,17 @@ export default function TeamPage() {
         <p className="text-sm text-foreground-muted">Who's working today, and how far along they are.</p>
       </div>
 
-      {isPending && <TeamSummaryCardsSkeleton />}
+      {isPending && (
+        <>
+          <Skeleton className="h-24 w-full rounded-lg" />
+          <TeamSummaryCardsSkeleton />
+        </>
+      )}
       {isError && <ErrorState error={error} onRetry={refetch} />}
 
       {data && (
         <>
+          <TeamHeadline summary={data.summary} />
           <TeamSummaryCards summary={data.summary} />
           <TeamAttendanceTable employees={data.employees} />
         </>

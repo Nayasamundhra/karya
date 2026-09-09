@@ -6,7 +6,7 @@
  * entry here, not touching the shell.
  */
 import type { LucideIcon } from 'lucide-react'
-import { CalendarClock, LayoutDashboard, User, Users } from 'lucide-react'
+import { Building2, CalendarClock, LayoutDashboard, User, Users } from 'lucide-react'
 
 import { isUserRole, type UserRole } from '@/lib/api/types'
 
@@ -51,6 +51,17 @@ export const NAV_ITEMS: readonly NavItem[] = [
     to: '/admin/users',
     icon: Users,
     roles: ['TENANT_ADMIN'],
+    showInBottomNav: false,
+  },
+  {
+    id: 'admin-organization',
+    // A MANAGER lands on the same route but sees only the Displays content
+    // (`OrganizationPage`) — this label is written for that narrower case
+    // too, since it's the one both roles share.
+    label: 'Organization',
+    to: '/admin/organization',
+    icon: Building2,
+    roles: ['MANAGER', 'TENANT_ADMIN'],
     showInBottomNav: false,
   },
   {

@@ -61,6 +61,16 @@ export interface ApiFetchOptions {
   query?: Record<string, string | number | boolean | undefined | null>
   /** Attach `Authorization: Bearer <access token>` and auto-refresh-and-retry once on 401. Default true. */
   auth?: boolean
+  /**
+   * Attach `Authorization: Bearer <token>` verbatim instead of the signed-in
+   * user's access token - for the one caller that authenticates as
+   * something other than a user session: the office-display kiosk's own
+   * display token (see `src/lib/api/endpoints/display.ts`). Implies no
+   * refresh-and-retry on 401 - a display token isn't a session, there is
+   * nothing to refresh it into, a 401 just means "revoked or wrong".
+   * Mutually exclusive with `auth` in practice, though nothing enforces that.
+   */
+  token?: string
   /** Caller-supplied cancellation (e.g. TanStack Query's queryFn signal). */
   signal?: AbortSignal
   timeoutMs?: number
@@ -109,7 +119,16 @@ async function readJsonBody(response: Response): Promise<unknown> {
  * partially-parsed or ambiguous result.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { method = 'GET', body, query, auth = true, signal, timeoutMs = DEFAULT_TIMEOUT_MS, _retried = false } = options
+  const {
+    method = 'GET',
+    body,
+    query,
+    auth = true,
+    token: explicitToken,
+    signal,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    _retried = false,
+  } = options
 
   const headers = new Headers({ Accept: 'application/json' })
   if (body !== undefined) headers.set('Content-Type', 'application/json')
@@ -119,7 +138,9 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   // read back off the response, never assumed.
   headers.set('X-Request-ID', crypto.randomUUID())
 
-  if (auth) {
+  if (explicitToken) {
+    headers.set('Authorization', `Bearer ${explicitToken}`)
+  } else if (auth) {
     const token = authHooks?.getAccessToken()
     if (token) headers.set('Authorization', `Bearer ${token}`)
   }
@@ -145,7 +166,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   }
   cleanup()
 
-  if (response.status === 401 && auth && !_retried && authHooks) {
+  if (response.status === 401 && auth && !explicitToken && !_retried && authHooks) {
     try {
       await refreshOnce()
     } catch {
@@ -159,10 +180,14 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   const responseBody = await readJsonBody(response)
 
   if (!response.ok) {
-    if (response.status === 401 && auth) {
+    if (response.status === 401 && auth && !explicitToken) {
       // Refresh itself did not throw above only because `_retried` was
       // already true — i.e. the retried request is *also* unauthorized.
-      // That is a genuinely dead session, not a transient race.
+      // That is a genuinely dead session, not a transient race. Excluded
+      // for `explicitToken` requests: a rejected display token must never
+      // tear down whatever unrelated user session happens to be signed in
+      // (normally none — the kiosk route needs no login at all — but
+      // nothing here should assume that).
       authHooks?.onSessionExpired()
     }
     throw apiErrorFromResponse(response, responseBody)

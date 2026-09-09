@@ -97,6 +97,32 @@ test.describe('authenticated session', () => {
         }),
       })
     })
+    // The employee home (`EmployeeHome`) fetches live attendance data —
+    // mocked so it renders its real check-in state instead of ErrorState.
+    await page.route('**/api/v1/attendance/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user_id: 'user-1',
+          state: 'NOT_CHECKED_IN',
+          day: { date: '2026-01-05', status: 'NO_RECORD', sessions: [], first_check_in: null, last_check_out: null },
+        }),
+      })
+    })
+    await page.route('**/api/v1/attendance/me/history*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user_id: 'user-1',
+          from_date: '2025-12-30',
+          to_date: '2026-01-05',
+          items: [],
+          pagination: { page: 1, page_size: 7, total: 0, total_pages: 0 },
+        }),
+      })
+    })
 
     await page.goto('/login')
     await page.getByLabel('Organization ID').fill('acme')
@@ -104,7 +130,9 @@ test.describe('authenticated session', () => {
     await page.getByLabel('Password').fill('correct-password-123')
     await page.getByRole('button', { name: 'Sign in' }).click()
 
-    await expect(page.getByRole('heading', { name: /welcome, riya sharma/i })).toBeVisible()
+    await expect(
+      page.getByRole('heading', { name: /good (morning|afternoon|evening), riya/i }),
+    ).toBeVisible()
     // A STAFF user's nav must never show admin-only links, checked at the
     // real rendered DOM rather than only at the unit-test level.
     await expect(page.getByRole('navigation', { name: 'Primary' }).first().getByText('Manage users')).toHaveCount(0)
