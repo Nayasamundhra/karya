@@ -1,0 +1,112 @@
+name: Backend CI/CD
+
+# Runs only when something under backend/ (or this workflow itself) changes,
+# so a frontend-only push never triggers a backend test run or deploy.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend.yml"
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Real PostgreSQL, matching the version in docker-compose.yml and the
+    # Dockerfile's runtime target — the suite deliberately never runs against
+    # SQLite (see backend/tests/conftest.py and CLAUDE.md's Testing section).
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: karya
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d karya"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ENVIRONMENT: test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: karya
+      # Not a real secret: this only ever signs tokens inside an ephemeral,
+      # per-run CI database that's discarded when the job ends. Real
+      # deployments use PROD_JWT_SECRET_KEY (a GitHub Actions secret) instead
+      # — see the deploy job below and backend/docs/DEPLOYMENT.md.
+      JWT_SECRET_KEY: ci-only-value-never-used-outside-this-ephemeral-test-run-0000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install backend + dev dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run the test suite
+        run: pytest
+
+  deploy:
+    needs: test
+    # Only ever deploys from a real push to master, never from a pull
+    # request build — a red PR run should never be able to reach production.
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install backend (runtime only — no dev/test extras needed here)
+        run: python -m pip install .
+
+      - name: Run migrations against the production database
+        # ENVIRONMENT=staging here (not production) is deliberate: importing
+        # app.core.config triggers full Settings validation, and the
+        # production-only checks (HTTPS CORS origins, PUBLIC_APP_URL, SMTP)
+        # have nothing to do with running a schema migration. The deployed
+        # app on Render still boots with ENVIRONMENT=production for real —
+        # this only relaxes the throwaway migration step in CI. See
+        # backend/docs/DEPLOYMENT.md and backend/app/core/config.py
+        # (_validate_production) for the full reasoning.
+        env:
+          ENVIRONMENT: staging
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          JWT_SECRET_KEY: ${{ secrets.PROD_JWT_SECRET_KEY }}
+        run: alembic upgrade head
+
+      - name: Confirm migrations landed
+        env:
+          ENVIRONMENT: staging
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          JWT_SECRET_KEY: ${{ secrets.PROD_JWT_SECRET_KEY }}
+        run: alembic current
+
+      - name: Trigger Render deploy
+        # Render's own Git auto-deploy is left off (render.yaml sets
+        # autoDeploy: false) precisely so this is the only thing that can
+        # put a new build into production, and only after the steps above
+        # (tests, then migrations) have already succeeded.
+        run: curl -fsS --retry 3 -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"

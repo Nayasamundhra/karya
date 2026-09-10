@@ -1,0 +1,90 @@
+name: Frontend CI/CD
+
+# Runs only when something under frontend/ (or this workflow itself)
+# changes, so a backend-only push never triggers a frontend build or deploy.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+
+defaults:
+  run:
+    working-directory: frontend
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # Baked into the JS bundle at build time (Vite env vars are
+      # compile-time, not read at runtime) — this is why it's a repo
+      # "variable" set in GitHub, not a per-request config value. Set it
+      # under Settings -> Secrets and variables -> Actions -> Variables to
+      # the deployed backend's URL, e.g. https://karya-api.onrender.com
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+      VITE_APP_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Typecheck (tsc -b, all project references)
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit / component / accessibility tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+  deploy:
+    needs: test
+    # Only ever deploys from a real push to master, never from a pull
+    # request build — a red PR run should never be able to reach production.
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Pull Vercel project settings
+        # Vercel's own Git auto-deploy is left off for this project
+        # precisely so this workflow is the only thing that can put a new
+        # build into production, and only after the test job above (which
+        # already re-runs typecheck/lint/test/build) has succeeded.
+        run: npx vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+
+      - name: Build for production via Vercel CLI
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          VITE_APP_ENV: production
+        run: npx vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+
+      - name: Deploy prebuilt output
+        run: npx vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}"
