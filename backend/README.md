@@ -1320,11 +1320,13 @@ and to that user, so it is not a window onto the tenant's whole audit log.
 
 ### Deliberate limitations
 
-- **No password reset by email**, because Karya has no email infrastructure. Doing
-  it properly needs delivery, single-use expiring tokens, anti-enumeration and
-  rate limiting; a half-built version would be worse than none. An administrator
-  can currently only create an account *with* a password, which they must convey
-  out of band.
+- **No password reset by email.** True when Phase 6 was written because Karya had
+  no email infrastructure at all; Phase 11 later added one (`app/services/email/`),
+  but only for onboarding's own verification link - self-service password reset is
+  a separate, still-unbuilt feature needing its own single-use expiring tokens,
+  anti-enumeration and rate limiting of its own; a half-built version would be
+  worse than none. An administrator can currently only create an account *with* a
+  password, which they must convey out of band.
 - **No email invitations**, for the same reason.
 - **No rate limiting** on login or password change. This is a **production
   deployment requirement**, not something Phase 6 fakes: it belongs at the edge

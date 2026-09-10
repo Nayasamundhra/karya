@@ -78,6 +78,25 @@ def fresh_rate_limits() -> Iterator[None]:
     """
     get_rate_limiter().reset()
     yield
+
+
+@pytest.fixture(autouse=True)
+def hermetic_smtp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never let the suite attempt a real SMTP connection.
+
+    `app.core.config.settings` is the one process-wide instance the app (and
+    this fixture module) imports, built from whatever `SMTP_HOST` happens to
+    be in the developer's own `.env` - which is exactly what a developer
+    fills in to test onboarding emails for real locally (see
+    `app/services/email/mailer.py`). Forcing it back to unconfigured here,
+    for every test regardless of `.env`, is what keeps the suite fast,
+    offline and safe to run without silently emailing whatever real address
+    a test happens to use as `admin_email` - the same "isolate what a real
+    `.env` might set" concern `fresh_rate_limits` above addresses for the
+    rate limiter. `test_mailer.py` covers the real-SMTP path directly, with
+    `smtplib.SMTP` mocked, so nothing loses coverage by disabling it here.
+    """
+    monkeypatch.setattr(settings, "smtp_host", None)
     get_rate_limiter().reset()
 
 
