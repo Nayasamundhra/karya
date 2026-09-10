@@ -13,6 +13,9 @@ on:
     paths:
       - "frontend/**"
       - ".github/workflows/frontend.yml"
+  # Lets a run be re-triggered from the Actions tab (e.g. after fixing a
+  # deploy-time secret) without needing an unrelated code change to push.
+  workflow_dispatch:
 
 defaults:
   run:
