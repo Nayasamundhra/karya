@@ -26,6 +26,10 @@ node_modules/
 dist/
 build/
 
+# --- Vercel CLI (the frontend deploy step runs from the repo root, so a
+# .vercel/ directory can land here too, not just inside frontend/) ----------
+.vercel/
+
 # --- Tooling ----------------------------------------------------------------
 .pytest_cache/
 .mypy_cache/

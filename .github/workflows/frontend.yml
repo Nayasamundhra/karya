@@ -17,13 +17,12 @@ on:
   # deploy-time secret) without needing an unrelated code change to push.
   workflow_dispatch:
 
-defaults:
-  run:
-    working-directory: frontend
-
 jobs:
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     env:
       # Baked into the JS bundle at build time (Vite env vars are
       # compile-time, not read at runtime) — this is why it's a repo
@@ -76,7 +75,16 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - run: npm ci
+        working-directory: frontend
 
+      # The three Vercel CLI steps below run from the repo ROOT, not
+      # frontend/ - deliberately. This project's Vercel settings have
+      # rootDirectory: "frontend" (set when the project was imported), so
+      # the CLI already expects to be invoked from the repo root and to
+      # find the app at <root>/frontend itself. Running these from inside
+      # frontend/ makes it look for frontend/frontend and fails with
+      # "Cannot resolve entry module index.html" - verified directly
+      # while debugging the first real deploy attempt.
       - name: Pull Vercel project settings
         # Vercel's own Git auto-deploy is left off for this project
         # precisely so this workflow is the only thing that can put a new
