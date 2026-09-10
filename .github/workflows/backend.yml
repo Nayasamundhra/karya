@@ -29,7 +29,15 @@ jobs:
         image: postgres:18-alpine
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          # Deliberately not the word "postgres" (or anything else that
+          # appears elsewhere in the connection string, like the driver
+          # name "postgresql+psycopg" itself): the test suite asserts this
+          # exact value never appears in the app's masked/safe rendering of
+          # the URL, so a password that happens to collide with an
+          # unrelated fixed part of that string is a false-positive leak,
+          # not a real one. See tests/test_db_session.py and
+          # tests/test_observability.py.
+          POSTGRES_PASSWORD: ci-ephemeral-db-password-9f4a2c
           POSTGRES_DB: karya
         ports:
           - 5432:5432
@@ -43,7 +51,7 @@ jobs:
       POSTGRES_HOST: localhost
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ci-ephemeral-db-password-9f4a2c
       POSTGRES_DB: karya
       # Not a real secret: this only ever signs tokens inside an ephemeral,
       # per-run CI database that's discarded when the job ends. Real
@@ -60,6 +68,18 @@ jobs:
 
       - name: Install backend + dev dependencies
         run: python -m pip install -e ".[dev]"
+
+      - name: Migrate the plain (non-_test) database
+        # tests/conftest.py migrates <POSTGRES_DB>_test automatically for
+        # the suite's own fixtures, but a handful of tests intentionally
+        # bypass that plumbing and hit the plainly-configured database
+        # directly (e.g. test_health.py's readiness probe test, which uses
+        # a bare TestClient with no get_db override — see CLAUDE.md's note
+        # that /ready must work independent of any request-scoped session).
+        # A real local setup always has this migrated already (it's a
+        # normal, documented setup step before `pytest` — see this repo's
+        # CLAUDE.md Commands section); CI needs the same step explicitly.
+        run: alembic upgrade head
 
       - name: Run the test suite
         run: pytest
