@@ -122,25 +122,30 @@ app/
 │   ├── limits.py       rate-limit dependencies (the only wiring routes see)
 │   ├── probes.py       GET /health, GET /ready
 │   └── v1/             router.py + auth.py, presence.py, attendance.py,
-│                       users.py, tenant.py  (route handlers only — thin)
+│                       users.py, tenant.py, onboarding.py, display.py
+│                       (route handlers only — thin)
 ├── db/                 base.py (DeclarativeBase), session.py (engine/pool),
 │                       tenant_scope.py (tenant-scoped query helpers)
-├── models/             the 7 SQLAlchemy entities
+├── models/             the 9 SQLAlchemy entities
 ├── schemas/            Pydantic request/response contracts
 └── services/            business logic, one package per domain:
     ├── auth/           password (Argon2id), jwt (access tokens),
     │                   refresh_tokens, service (login/refresh/logout)
     ├── presence/        gps, qr, results, service (combines both signals)
     ├── attendance/      service (check-in/out + row locking), queries (reads)
-    └── users/           service (lifecycle/roles/password), errors
+    ├── users/           service (lifecycle/roles/password), errors
+    ├── tenant/          tenant/attendance-location self-service (service.py)
+    ├── onboarding/      self-registration + setup-checklist flow (service.py)
+    └── email/            mailer (verification emails; Phase 11)
 ```
 
 ### Data model
 
-Seven tables, UUID primary keys throughout, `TIMESTAMPTZ` everywhere:
+Nine tables, UUID primary keys throughout, `TIMESTAMPTZ` everywhere:
 `tenants`, `users`, `attendance_locations`, `qr_challenges`, `attendance_events`
 (source of truth for attendance — never a derived status column),
-`audit_logs` (append-only), `refresh_tokens` (hashed). Every tenant-owned table
+`audit_logs` (append-only), `refresh_tokens` (hashed), `email_verification_tokens`
+and `display_tokens` (hashed, Phase 11: office-display kiosk auth). Every tenant-owned table
 carries `tenant_id`; deletion is governed per-FK (`RESTRICT`/`CASCADE`/`SET
 NULL`, never `cascade="all, delete-orphan"`) — see `backend/README.md` §9.
 
@@ -202,9 +207,10 @@ Starlette already runs each `def` endpoint in a worker thread.
   clears counters between tests) — a limiter that blocks a legitimate flow is
   exactly the regression the suite exists to catch, and it can't catch that
   disabled.
-- The three `*_concurrency.py` modules (`test_attendance_concurrency.py`,
-  `test_presence_concurrency.py`, `test_users_concurrency.py`) are the only
-  ones that commit to the database (real concurrency needs separate
+- The `*_concurrency.py` modules (`test_attendance_concurrency.py`,
+  `test_presence_concurrency.py`, `test_users_concurrency.py`,
+  `test_onboarding_concurrency.py`, `test_display_concurrency.py`) are the
+  only ones that commit to the database (real concurrency needs separate
   connections) and clean up their own rows. Each also contains a deliberately
   naive implementation asserted to *fail* under the same forced interleaving —
   so if the harness ever stops creating real contention, that test fails
