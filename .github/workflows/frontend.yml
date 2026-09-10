@@ -57,9 +57,10 @@ jobs:
 
   deploy:
     needs: test
-    # Only ever deploys from a real push to master, never from a pull
-    # request build — a red PR run should never be able to reach production.
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    # Deploys from a real push to master, or a manual re-run of an existing
+    # master run (workflow_dispatch) — never from a pull request build, so
+    # a red PR run can never reach production.
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment: production
     env:
