@@ -18,7 +18,7 @@ relying on a number here.
 | Backend | [Render](https://render.com) | Runs `backend/Dockerfile` unmodified - no separate buildpack config to maintain. Free web service plan; sleeps after 15 min idle (see §5). |
 | Database | [Neon](https://neon.tech) | Free serverless Postgres with no forced expiry (unlike some providers' free Postgres, which auto-deletes after a fixed window). Karya's sync SQLAlchemy engine manages its own connection pool, so this deployment uses Neon's *direct* endpoint, not its pgbouncer pooler. |
 | Frontend | [Vercel](https://vercel.com) | Static Vite/PWA build, zero-config SPA routing for the framework preset, generous free tier, automatic HTTPS. |
-| Email | [Brevo](https://brevo.com) | Free-tier transactional SMTP, needed because `ENVIRONMENT=production` refuses to boot without `SMTP_HOST` set (`app/core/config.py`, `_validate_production`) - this deployment runs fully hardened `production`, not the SMTP-skipping `staging` shortcut, so real users can self-register from day one. |
+| Email | [Brevo](https://brevo.com), via its **HTTP API**, not SMTP | `ENVIRONMENT=production` refuses to boot without an email transport configured (`app/core/config.py`, `_validate_production`) - this deployment runs fully hardened `production`, not the SMTP-skipping `staging` shortcut, so real users can self-register from day one. SMTP specifically does not work here: verified directly that Render's free tier blocks outbound SMTP connections (a real send attempt hung until timeout and never reached `smtp-relay.brevo.com`) - see §5 and `app/services/email/mailer.py`. |
 | CI/CD | GitHub Actions | Free on public repos; gates every deploy on the real test suite passing first (see §3) - neither Render's nor Vercel's own auto-deploy runs `pytest` or `vitest`. |
 
 ## 2. Repository layout added for this
@@ -65,8 +65,11 @@ run or deploy of the other half.
 **Render dashboard** (prompted once when the Blueprint is created, from
 `render.yaml`'s `sync: false` entries - never stored in git):
 `JWT_SECRET_KEY`, `DATABASE_URL`, `CORS_ALLOWED_ORIGINS`, `PUBLIC_APP_URL`,
-`SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`. See
-`backend/.env.example` for what each one does.
+`BREVO_API_KEY`, `SMTP_FROM_ADDRESS` (still needed - it's the sender identity
+for both transports, not an SMTP-only setting). See `backend/.env.example`
+for what each one does, and §5 below for why this deployment uses
+`BREVO_API_KEY` rather than `SMTP_HOST`/`SMTP_USERNAME`/`SMTP_PASSWORD` even
+though the app supports both.
 
 **GitHub Actions secrets** (repo Settings -> Secrets and variables ->
 Actions -> Secrets): `PROD_DATABASE_URL` (same Neon connection string as
@@ -105,10 +108,23 @@ running on free tiers rather than gaps in the application itself:
   none; Neon's own free-tier backup/point-in-time-recovery window (check
   their current docs) is what this deployment relies on, not anything
   Karya or this pipeline adds.
+- **Render's free tier blocks outbound SMTP.** Discovered by reproducing a
+  live onboarding failure: `POST /api/v1/onboarding/tenants` returned 503
+  with the log line `"error":"TimeoutError"` against `smtp-relay.brevo.com`,
+  duration ~14s (Karya's own `SMTP_TIMEOUT_SECONDS` giving up, not Brevo
+  refusing anything - the connection never completed at all). This is a
+  common anti-spam-relay policy on free-tier PaaS hosts, not a Karya or
+  Brevo bug. The fix was adding a second transport
+  (`app/services/email/mailer.py`'s Brevo-HTTP-API path) rather than
+  fighting the platform - plain HTTPS is not blocked the way SMTP ports
+  are. If this deployment ever moves off Render, either transport still
+  works; there was no need to remove SMTP support, only to stop relying on
+  it *here*.
 - **Brevo's free-tier sending limit** applies to every verification email
-  Karya sends. If it's ever exceeded, `app/services/email/mailer.py`
-  surfaces the SMTP failure as a 5xx on the onboarding endpoint rather than
-  silently dropping the email - it will be visible, not silent.
+  Karya sends, regardless of which transport delivers it. If it's ever
+  exceeded, `app/services/email/mailer.py` surfaces the delivery failure as
+  a 5xx on the onboarding endpoint rather than silently dropping the
+  email - it will be visible, not silent.
 
 ## 6. Rolling back
 

@@ -37,10 +37,6 @@ services:
         value: "false"
       - key: LOG_FORMAT
         value: json
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_USE_TLS
-        value: "true"
       # Everything below is either a secret or specific to your deployment
       # (a URL/host/credential I don't have) — Render will prompt for these
       # once when you create the Blueprint, and they're stored in Render's
@@ -53,11 +49,13 @@ services:
         sync: false # https://<your-vercel-project>.vercel.app
       - key: PUBLIC_APP_URL
         sync: false # same Vercel URL as above
-      - key: SMTP_HOST
-        sync: false # from Brevo
-      - key: SMTP_USERNAME
-        sync: false # from Brevo
-      - key: SMTP_PASSWORD
-        sync: false # Brevo SMTP key, not your account password
+      # Brevo's HTTP API, not SMTP: verified directly that Render's free tier
+      # blocks outbound SMTP entirely (a real send attempt hung until timeout
+      # and never reached smtp-relay.brevo.com), so SMTP_HOST/USERNAME/
+      # PASSWORD are deliberately not configured here even though the app
+      # supports them - see app/services/email/mailer.py and
+      # backend/docs/DEPLOYMENT.md.
+      - key: BREVO_API_KEY
+        sync: false # Brevo -> SMTP & API -> API Keys tab (not the SMTP tab)
       - key: SMTP_FROM_ADDRESS
         sync: false # the sender address you verified with Brevo

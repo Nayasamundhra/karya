@@ -148,19 +148,33 @@ def test_no_cors_origins_is_valid_in_production() -> None:
     assert production(cors_allowed_origins="").cors_origins == []
 
 
-def test_smtp_host_is_required_in_production() -> None:
-    """Without it, onboarding verification links are logged instead of emailed.
+def test_an_email_transport_is_required_in_production() -> None:
+    """Without one, onboarding verification links are logged instead of emailed.
 
     `app.services.email.mailer.send_email`'s unconfigured branch is a
     deliberate local-dev convenience - it must not be reachable in
     production, where "logged" means "shipped to whatever aggregates the
     app's own logs," and the body it logs is an account-verification link.
+    Either transport satisfies this - see
+    `test_brevo_api_key_alone_satisfies_the_production_email_requirement`
+    below for why SMTP alone is not assumed sufficient.
     """
     with pytest.raises(ValidationError):
         production(smtp_host=None)
 
     # Unconfigured SMTP is the documented default everywhere else.
     assert build(environment="local").smtp_host is None
+
+
+def test_brevo_api_key_alone_satisfies_the_production_email_requirement() -> None:
+    """Render's free tier - where Karya is actually deployed - blocks
+    outbound SMTP, so a production configuration with only BREVO_API_KEY set
+    (no SMTP_HOST at all) must be accepted, not just tolerated as a fallback.
+    See `app.services.email.mailer` for the full story.
+    """
+    config = production(smtp_host=None, brevo_api_key="a-real-brevo-api-key")
+    assert config.smtp_host is None
+    assert config.brevo_api_key is not None
 
 
 def test_public_app_url_must_be_https_in_production() -> None:

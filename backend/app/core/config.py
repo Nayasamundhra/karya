@@ -227,6 +227,20 @@ class Settings(BaseSettings):
     #: leave the onboarding transaction open indefinitely.
     smtp_timeout_seconds: int = 10
 
+    #: Brevo's HTTP transactional-email API, as an alternative transport to
+    #: SMTP above - not a replacement for it in general, but the only one
+    #: that works on hosts (Render's free tier among them) that block
+    #: outbound SMTP ports as an anti-spam-relay measure. When set, the
+    #: mailer sends over plain HTTPS instead of opening an SMTP connection;
+    #: see `app.services.email.mailer`. `smtp_from_address` is still the
+    #: sender identity either way - only the wire protocol changes.
+    brevo_api_key: SecretStr | None = None
+    #: Socket timeout for the HTTPS call to Brevo's API. Independent of
+    #: `smtp_timeout_seconds` because the two transports never run in the
+    #: same request - the mailer prefers Brevo's API when both happen to be
+    #: configured (see the mailer module for why).
+    brevo_api_timeout_seconds: int = 10
+
     # --- Onboarding (Phase 11) ------------------------------------------------
     # Where the verification link points. Deliberately separate from
     # CORS_ALLOWED_ORIGINS: that list is a security allowlist enforced by the
@@ -352,6 +366,8 @@ class Settings(BaseSettings):
             raise ValueError("EMAIL_VERIFICATION_TTL_HOURS must be positive.")
         if self.smtp_timeout_seconds <= 0:
             raise ValueError("SMTP_TIMEOUT_SECONDS must be positive.")
+        if self.brevo_api_timeout_seconds <= 0:
+            raise ValueError("BREVO_API_TIMEOUT_SECONDS must be positive.")
 
         if "*" in self.cors_origins:
             # Karya sends credentials, for which a wildcard origin is both
@@ -486,16 +502,18 @@ class Settings(BaseSettings):
                 f"{self.public_app_url!r}."
             )
 
-        # Unconfigured SMTP degrades to logging the onboarding email - link,
+        # Unconfigured email degrades to logging the onboarding email - link,
         # token and all - at INFO (see `app.services.email.mailer`). That
         # fallback exists for a bare local checkout; in production it would
         # mean every admin's account-verification link lands in whatever
-        # aggregates the app's own logs.
-        if not self.smtp_host:
+        # aggregates the app's own logs. Either transport satisfies this -
+        # SMTP_HOST for a host that allows outbound SMTP, BREVO_API_KEY for
+        # one (Render's free tier among them) that blocks it.
+        if not self.smtp_host and not self.brevo_api_key:
             raise ValueError(
-                "SMTP_HOST must be set when ENVIRONMENT is 'production'; "
-                "without it, onboarding verification links are logged instead "
-                "of emailed."
+                "SMTP_HOST or BREVO_API_KEY must be set when ENVIRONMENT is "
+                "'production'; without one of them, onboarding verification "
+                "links are logged instead of emailed."
             )
         return self
 

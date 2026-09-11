@@ -36,11 +36,14 @@ production deployment **must** set; everything else has a safe default.
 | `JWT_SECRET_KEY` | No default exists. At least 32 characters, and not one of the placeholders published in `.env.example`. Generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. |
 | `POSTGRES_PASSWORD` or `DATABASE_URL` | A production database must be authenticated. |
 | `CORS_ALLOWED_ORIGINS` | Only if a browser client exists. Every entry must be https. Leave empty for a backend-only deployment; that is the safest setting, not an omission. |
+| `PUBLIC_APP_URL` | Must be https. Where the onboarding verification link points a new admin at (Phase 11) - the credentials it protects cross the wire either way, same reasoning as the CORS rule above. |
+| `SMTP_HOST` or `BREVO_API_KEY` | Either satisfies this (Phase 11): without one, the onboarding verification link is only ever logged, never emailed. See `app/services/email/mailer.py` for why a production deployment may need the Brevo transport specifically - some hosts block outbound SMTP entirely. |
 
 **The application refuses to start** in production when: `JWT_SECRET_KEY` is
 missing, too short, or a known placeholder; `DEBUG=true`; the database password is
 empty or a placeholder and no `DATABASE_URL` is set; any CORS origin is not
-https; or any limit, timeout or pool value is nonsensical. A configuration
+https; `PUBLIC_APP_URL` is not https; neither `SMTP_HOST` nor `BREVO_API_KEY`
+is set; or any limit, timeout or pool value is nonsensical. A configuration
 mistake becomes a failed boot rather than a quiet weakness.
 
 Rotating `JWT_SECRET_KEY` invalidates every issued access token immediately.
