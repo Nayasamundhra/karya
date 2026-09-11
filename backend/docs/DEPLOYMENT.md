@@ -55,26 +55,28 @@ run or deploy of the other half.
      --prebuilt --prod`, using `VITE_API_BASE_URL` (a GitHub Actions
      *variable*, not a secret - it ends up in the public JS bundle either
      way) pointed at the Render URL.
-4. Render's own Git auto-deploy is turned off (`render.yaml`'s
-   `autoDeploy: false`), so the only path to a Render deploy is the pipeline
-   above.
+4. Both Render's and Vercel's own Git auto-deploy are turned off
+   (`render.yaml`'s `autoDeploy: false`; Vercel Project Settings -> Git ->
+   Disconnect), so this pipeline is the *only* path to production for
+   either half of the app - a red test run can never reach real users on
+   either side.
 
-   **Vercel's own Git integration is a separate story, worth being precise
-   about**: it auto-builds on *every* push to `master` regardless of this
-   repo's path filters - a real backend-only commit triggered one directly
-   (`"source":"git"` in Vercel's own deployment history), and because that
-   build never goes through this workflow, it never receives
-   `VITE_API_BASE_URL`, which crashes the app at boot (see §5). The
-   immediate fix was making `VITE_API_BASE_URL`/`VITE_APP_ENV` real Vercel
-   **project** environment variables (Project Settings -> Environment
-   Variables, not just a GitHub Actions variable) - `vercel build` picks up
-   a project-level variable automatically, so now *either* deploy path
-   produces a working build. That fixes the crash but not the original
-   test-gating intent: a Vercel-git-triggered build still skips
-   `typecheck`/`lint`/`test` entirely. To fully restore "only a green test
-   run reaches production," also disable Vercel's Git integration itself
-   (Project Settings -> Git -> disconnect, or scope it to a branch this repo
-   never pushes to) so this workflow is genuinely the only path left.
+   **This wasn't true for a while, and it's worth knowing the history**:
+   Vercel's Git integration auto-builds on *every* push to `master`
+   regardless of this repo's path filters, independent of this workflow -
+   a real backend-only commit triggered one directly (`"source":"git"` in
+   Vercel's own deployment history), and because that build never went
+   through `typecheck`/`lint`/`test` or received `VITE_API_BASE_URL` from
+   GitHub Actions, it crashed the whole app at boot (see §5's incident
+   writeup). The fix was two layers: `VITE_API_BASE_URL`/`VITE_APP_ENV` are
+   now also real Vercel **project** environment variables (§4), so even a
+   stray build from a reconnected integration would work correctly rather
+   than crash; and Vercel's Git integration is now disconnected entirely,
+   closing the test-gating gap for real, not just working around its
+   symptom. Verified after disconnecting: a `workflow_dispatch` run of
+   `frontend.yml` still deployed successfully (`"source":"cli"` in Vercel's
+   deployment history, confirming the CLI path doesn't depend on the Git
+   integration being connected).
 
 ## 4. Environment variables, by where they live
 
@@ -108,18 +110,19 @@ values above, not just the GitHub Actions copy: `VITE_API_BASE_URL`,
 These are additions to `PRODUCTION.md` §12's residual-risk list, specific to
 running on free tiers rather than gaps in the application itself:
 
-- **Vercel's Git integration deploys independently of this repo's own
-  pipeline**, and does not run `typecheck`/`lint`/`test` or receive
-  `VITE_API_BASE_URL` from GitHub Actions. A real backend-only commit
-  triggered exactly this: a Vercel-git build with no API URL configured,
-  which crashed the whole app at boot (`src/config/env.ts` validates
-  eagerly - see `frontend/README.md`/module docstring) - a blank page in
-  production, caught by hitting the live site directly rather than by any
-  automated check. Fixed by also setting `VITE_API_BASE_URL`/
-  `VITE_APP_ENV` as real Vercel **project** environment variables (§4), so
-  either deploy path now produces a working build - but that only fixes
-  the crash, not the test-gating gap; see §3's step 4 for closing that
-  properly (disabling Vercel's Git integration).
+- **(Resolved) Vercel's Git integration used to deploy independently of
+  this repo's own pipeline**, running neither `typecheck`/`lint`/`test`
+  nor receiving `VITE_API_BASE_URL` from GitHub Actions. This produced a
+  real incident: a backend-only commit triggered a Vercel-git build with
+  no API URL configured, which crashed the whole app at boot
+  (`src/config/env.ts` validates eagerly - see its module docstring) - a
+  blank page in production, caught by hitting the live site directly
+  rather than by any automated check. Fixed in two layers: `VITE_API_BASE_URL`/
+  `VITE_APP_ENV` are now also real Vercel **project** environment
+  variables (§4), and Vercel's Git integration is now disconnected
+  entirely (§3 step 4) - so this workflow is the only path to a frontend
+  deploy, the same guarantee `render.yaml`'s `autoDeploy: false` already
+  gave the backend.
 - **Cold starts.** Render's free web service sleeps after 15 minutes with
   no traffic; the first request after that takes on the order of 30-50
   seconds while it wakes. `/health`'s liveness check (no DB query) will be
