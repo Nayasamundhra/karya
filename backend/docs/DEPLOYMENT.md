@@ -26,7 +26,7 @@ relying on a number here.
 ```
 .github/workflows/backend.yml    test (pytest, real Postgres) -> migrate -> trigger Render
 .github/workflows/frontend.yml   test (typecheck/lint/test/build) -> deploy via Vercel CLI
-render.yaml                      Render Blueprint: service definition, env var list
+render.yaml                      Render Blueprint: web service + cron job, env var list
 frontend/vercel.json             build command, output dir, SPA fallback rewrite
 ```
 
@@ -161,6 +161,23 @@ running on free tiers rather than gaps in the application itself:
   exceeded, `app/services/email/mailer.py` surfaces the delivery failure as
   a 5xx on the onboarding endpoint rather than silently dropping the
   email - it will be visible, not silent.
+- **(Resolved) The forgotten-checkout sweep wasn't scheduled anywhere.**
+  `app/jobs/close_stale_sessions.py` existed from the moment the
+  forgotten-checkout safety net was added, but nothing in this deployment
+  ever ran it - the in-band path (`record_attendance` auto-closing a stale
+  `CHECK_IN` the moment that person's own next check-in/check-out touches
+  their row) covered the common case, so this went unnoticed until
+  reviewed directly against `render.yaml`. Until it was added, someone who
+  checked in and genuinely never came back would show as `CHECKED_IN` on
+  their team's dashboard indefinitely - the sweep is specifically the tail
+  case nothing else would trigger. Fixed by adding a `type: cron` service
+  to `render.yaml` (`karya-close-stale-sessions`, hourly) running
+  `python -m app.jobs.close_stale_sessions` with the same production env
+  vars as the web service - `app.core.config.Settings` runs its full
+  production validation for this process too, even though the sweep itself
+  only reads `DATABASE_URL`. I'm not fully certain of Render's current Cron
+  Job pricing/free-tier limits - verify on Render's own pricing page before
+  relying on the `plan: free` line in `render.yaml`.
 
 ## 6. Rolling back
 

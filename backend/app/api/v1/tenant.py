@@ -148,6 +148,7 @@ def create_own_location(
             latitude=payload.latitude,
             longitude=payload.longitude,
             geofence_radius_meters=payload.geofence_radius_meters,
+            max_shift_hours=payload.max_shift_hours,
         )
     except AttendanceLocationExistsError as exc:
         raise HTTPException(
@@ -179,6 +180,41 @@ def update_own_location(
     try:
         location = tenant_service.update_own_location(
             session, tenant_id=current_user.tenant_id, changes=payload.changes()
+        )
+    except NoAttendanceLocationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_NO_LOCATION_DETAIL
+        ) from exc
+
+    session.commit()
+    return AttendanceLocationResponse.model_validate(location)
+
+
+@router.post(
+    "/me/location/qr-token/regenerate",
+    response_model=AttendanceLocationResponse,
+    summary="Regenerate the printed QR code for the caller's attendance location",
+    dependencies=[ADMIN_WRITE_RATE_LIMIT],
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": _NO_LOCATION_DETAIL},
+        **RATE_LIMITED_RESPONSE,
+    },
+)
+def regenerate_location_qr_token(
+    session: DbSession, current_user: TenantAdmin
+) -> AttendanceLocationResponse:
+    """Mint a fresh QR token; the old printed code stops working immediately.
+
+    TENANT_ADMIN only, same as creating/updating the location itself. This
+    is the compensating control for a leaked or over-shared static QR - there
+    is no rotation left to age a compromised code out on its own, so
+    invalidating it is a deliberate action instead.
+    """
+    try:
+        location = tenant_service.regenerate_location_qr_token(
+            session, tenant_id=current_user.tenant_id, actor_user_id=current_user.id
         )
     except NoAttendanceLocationError as exc:
         raise HTTPException(

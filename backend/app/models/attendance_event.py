@@ -35,6 +35,12 @@ class VerificationStatus(enum.StrEnum):
     VERIFIED = "VERIFIED"
     REJECTED = "REJECTED"
     MANUAL_REVIEW = "MANUAL_REVIEW"
+    #: A system-generated CHECK_OUT, not a person's action. Written when a
+    #: CHECK_IN has stayed open past `attendance_locations.max_shift_hours` - see
+    #: `app.services.attendance.service.close_stale_session`. Carries no GPS
+    #: evidence (`latitude`/`longitude`/`gps_accuracy_meters` all `None`),
+    #: which the columns already allow.
+    AUTO_CLOSED = "AUTO_CLOSED"
 
 
 class AttendanceEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

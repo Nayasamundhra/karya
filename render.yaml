@@ -59,3 +59,60 @@ services:
         sync: false # Brevo -> SMTP & API -> API Keys tab (not the SMTP tab)
       - key: SMTP_FROM_ADDRESS
         sync: false # the sender address you verified with Brevo
+
+  # Forgotten-checkout safety net (see backend/app/jobs/close_stale_sessions.py
+  # and CLAUDE.md's "forgotten checkout" section). The in-band path -
+  # `record_attendance` auto-closing a stale CHECK_IN the moment the same
+  # person next checks in or out - handles the common case with no help from
+  # this job. This cron exists only for the tail case: someone who never
+  # comes back at all, whose row nothing else would ever touch, so their
+  # team's dashboard would otherwise show them as CHECKED_IN indefinitely.
+  # Added because that gap existed in this deployment with nothing running
+  # the sweep at all - see backend/docs/DEPLOYMENT.md §7.
+  #
+  # I'm not fully certain of Render's current Cron Job pricing/free-tier
+  # limits (they change over time, same caveat backend/docs/DEPLOYMENT.md
+  # already states for the web service's free plan) - verify on Render's own
+  # pricing page before relying on the `plan: free` line below.
+  - type: cron
+    name: karya-close-stale-sessions
+    runtime: docker
+    plan: free
+    region: oregon # match the web service's region above
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: python -m app.jobs.close_stale_sessions
+    # Hourly: frequent enough that a forgotten checkout is visible within
+    # about an hour of crossing the tenant's own
+    # `attendance_locations.max_shift_hours`, cheap enough that the common
+    # case (nothing stale to close - see close_stale_sessions.py) costs
+    # nothing. Adjust if that trade-off doesn't fit your tenants.
+    schedule: "0 * * * *"
+    envVars:
+      # `app.core.config.Settings` runs its full production validation for
+      # *any* process that imports it, including this one - even though the
+      # sweep itself only ever reads DATABASE_URL. So this needs the same
+      # env vars as the web service above, not just the one it uses; see
+      # that service's comments for what each is and where it comes from.
+      # Render's Blueprint spec supports sharing an env var group across
+      # services if you'd rather not keep two copies of these in sync by
+      # hand - check Render's current docs for the exact syntax, since it
+      # wasn't re-verified for this file.
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: LOG_FORMAT
+        value: json
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: SMTP_FROM_ADDRESS
+        sync: false

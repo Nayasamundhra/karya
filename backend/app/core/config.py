@@ -188,7 +188,6 @@ class Settings(BaseSettings):
     rate_limit_login_failures_per_15_min: int = 10
     rate_limit_refresh_per_minute: int = 60
     rate_limit_password_change_per_15_min: int = 5
-    rate_limit_qr_challenge_per_minute: int = 60
     rate_limit_presence_per_minute: int = 30
     rate_limit_attendance_per_minute: int = 20
     rate_limit_admin_write_per_minute: int = 120
@@ -202,9 +201,12 @@ class Settings(BaseSettings):
     # geofence, so such a reading is rejected rather than silently trusted.
     max_gps_accuracy_meters: float = 100.0
 
-    # Lifetime of a dynamic QR challenge. Short by design: the office display
-    # rotates the code, so a photographed QR is useless within seconds.
-    qr_challenge_ttl_seconds: int = 30
+    # Note: the forgotten-checkout cutoff (how many hours an open CHECK_IN
+    # may sit before being auto-closed) is a *per-tenant* setting -
+    # `attendance_locations.max_shift_hours` - not a global one, since a
+    # 9-to-5 office and 24h on-call staff need genuinely different numbers.
+    # See `app.models.attendance_location.DEFAULT_MAX_SHIFT_HOURS` for what a
+    # freshly created location gets.
 
     # --- Outbound email (Phase 11: onboarding) -------------------------------
     # stdlib `smtplib`, no third-party dependency - same precedent as Phase 7's
@@ -360,8 +362,6 @@ class Settings(BaseSettings):
 
         if self.max_gps_accuracy_meters <= 0:
             raise ValueError("MAX_GPS_ACCURACY_METERS must be positive.")
-        if self.qr_challenge_ttl_seconds <= 0:
-            raise ValueError("QR_CHALLENGE_TTL_SECONDS must be positive.")
         if self.email_verification_ttl_hours <= 0:
             raise ValueError("EMAIL_VERIFICATION_TTL_HOURS must be positive.")
         if self.smtp_timeout_seconds <= 0:
@@ -420,10 +420,6 @@ class Settings(BaseSettings):
             (
                 "RATE_LIMIT_PASSWORD_CHANGE_PER_15_MIN",
                 self.rate_limit_password_change_per_15_min,
-            ),
-            (
-                "RATE_LIMIT_QR_CHALLENGE_PER_MINUTE",
-                self.rate_limit_qr_challenge_per_minute,
             ),
             ("RATE_LIMIT_PRESENCE_PER_MINUTE", self.rate_limit_presence_per_minute),
             ("RATE_LIMIT_ATTENDANCE_PER_MINUTE", self.rate_limit_attendance_per_minute),

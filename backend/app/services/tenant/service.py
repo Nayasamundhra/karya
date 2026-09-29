@@ -15,6 +15,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.attendance_location import AttendanceLocation
+from app.models.audit_log import AuditLog
+
+ACTION_LOCATION_QR_TOKEN_REGENERATED = "ATTENDANCE_LOCATION_QR_TOKEN_REGENERATED"
 
 
 class AttendanceLocationExistsError(Exception):
@@ -49,6 +52,7 @@ def create_own_location(
     latitude: float,
     longitude: float,
     geofence_radius_meters: int,
+    max_shift_hours: int,
     description: str | None = None,
 ) -> AttendanceLocation:
     """Create the tenant's one attendance location.
@@ -66,6 +70,7 @@ def create_own_location(
         latitude=latitude,
         longitude=longitude,
         geofence_radius_meters=geofence_radius_meters,
+        max_shift_hours=max_shift_hours,
     )
     session.add(location)
     # The SELECT above is only a fast path for the common case - two
@@ -97,4 +102,37 @@ def update_own_location(
 
     for field, value in changes.items():
         setattr(location, field, value)
+    return location
+
+
+def regenerate_location_qr_token(
+    session: Session, *, tenant_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> AttendanceLocation:
+    """Replace the tenant's printed QR code with a fresh, unguessable value.
+
+    The only lever against a leaked or over-shared code now that it is
+    static rather than expiring on its own (see
+    `app.models.attendance_location.AttendanceLocation.qr_token`). The old
+    value stops resolving the instant this commits - `python`'s ``uuid4`` is
+    generated here rather than left to the database default so the new value
+    is available to return in the same response.
+
+    Raises:
+        NoAttendanceLocationError: none exists yet.
+    """
+    location = get_own_location(session, tenant_id=tenant_id)
+    if location is None:
+        raise NoAttendanceLocationError
+
+    location.qr_token = uuid.uuid4()
+    session.add(
+        AuditLog(
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            action=ACTION_LOCATION_QR_TOKEN_REGENERATED,
+            target_type=AttendanceLocation.__name__,
+            target_id=location.id,
+            log_metadata={},
+        )
+    )
     return location

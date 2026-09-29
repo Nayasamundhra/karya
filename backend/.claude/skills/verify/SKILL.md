@@ -21,10 +21,13 @@ $p = Start-Process -FilePath ".\.venv\Scripts\python.exe" `
 Stop-Process -Id $p.Id -Force
 ```
 
-Use a port in the 804x range; the app itself has no default port. Any setting can
-be overridden per-process with an env var before `Start-Process`, e.g.
-`$env:QR_CHALLENGE_TTL_SECONDS = "3"` to watch a QR lapse on the real clock
-in seconds instead of 30. That also proves the setting is genuinely wired.
+Use a port in the 804x range; the app itself has no default port. The
+forgotten-checkout cutoff is per-tenant now (`attendance_locations.max_shift_hours`,
+minimum `1`, not an env var) - `PATCH /tenant/me/location {"max_shift_hours": 1}`
+as TENANT_ADMIN plus seeding a `CHECK_IN` with an `event_timestamp` over an
+hour old (see Seeding) is the way to watch the very next check-in auto-close
+it, instead of waiting for the real default (16h). That also proves the
+setting is genuinely wired.
 
 **Capture stderr to a file.** Phase 7's logs are one JSON object per line and are
 half the evidence — the privacy sweep and the access-log assertions both read
@@ -45,7 +48,7 @@ Teardown order matters — `users.tenant_id` and `attendance_locations.tenant_id
 are `ON DELETE RESTRICT`:
 
 ```
-qr_challenges, audit_logs, refresh_tokens, attendance_events
+audit_logs, refresh_tokens, attendance_events
   -> attendance_locations -> users -> tenants
 ```
 
@@ -59,13 +62,14 @@ DB. Confirm `attendance_events` is still 0 afterwards.
 | Boot | `GET /health` (never queries the DB), `GET /ready` (200/503), `GET /openapi.json` (24 paths as of Phase 7 — print them, don't assert a count), `GET /docs` |
 | Auth | login → `/auth/me` → refresh (rotate) → replay old refresh (401) → logout → refresh (401) |
 | Enumeration | wrong password / unknown tenant / right user+wrong tenant must return byte-identical 401 |
-| QR issuance | STAFF 403, MANAGER 201, TENANT_ADMIN 201, SUPER_ADMIN 403 (no hierarchy) |
-| Presence | valid → `PRESENCE_VERIFIED`; replay → `QR_ALREADY_USED`; 350 m → `OUTSIDE_GEOFENCE`; then reuse that same QR from inside — **it must still work** (a failed attempt must not burn it) |
-| Cross-tenant | tenant A submits tenant B's challenge → `QR_NOT_FOUND`, and B's challenge must still be usable by B |
+| QR regeneration | STAFF 403, MANAGER 403, TENANT_ADMIN 200 (old token stops resolving, new one works) |
+| Presence | valid → `PRESENCE_VERIFIED`; 350 m → `OUTSIDE_GEOFENCE`; unknown token → `QR_NOT_FOUND`; then reuse the **same** QR from inside — it must still work, repeatedly, since it is static now |
+| Cross-tenant | tenant A submits tenant B's QR token → `QR_NOT_FOUND`, and B's own token must still be usable by B |
 | Spoofing | `gps_verified` / `qr_verified` / `presence_verified` / `distance_meters` / `tenant_id` / `user_id` in the body → 422 |
 | DB authority | flip `users.status`/`role` from a second process; the *same unexpired token* must change behaviour on the next request |
-| Attendance | check-in → duplicate check-in (`ALREADY_CHECKED_IN`) → check-out → duplicate check-out (`NOT_CHECKED_IN`) → check-in again; each success needs its **own fresh QR** |
-| Attendance races | fire N simultaneous check-ins (each with its own challenge) → exactly one succeeds, the rest `ALREADY_CHECKED_IN`; same for check-out |
+| Attendance | check-in → duplicate check-in (`ALREADY_CHECKED_IN`) → check-out → duplicate check-out (`NOT_CHECKED_IN`) → check-in again; the same static QR token authorises every step |
+| Attendance races | fire N simultaneous check-ins (same static QR) → exactly one succeeds, the rest `ALREADY_CHECKED_IN`; same for check-out |
+| Auto-close | seed a CHECK_IN with `event_timestamp` older than the tenant's own `attendance_locations.max_shift_hours`; the next check-in for that user succeeds, `auto_closed_previous_session: true`, and a `CHECK_OUT` with `verification_status=AUTO_CLOSED` now exists. Also worth checking: two tenants with different `max_shift_hours` and the same stale check-in age auto-close differently |
 | Attendance reads | `/attendance/me`, `/me/history`, `/team/today`, `/users/{id}`, `/users/{id}/history`; STAFF gets 403 on the last three; cross-tenant ids give **404 identical to a random UUID** |
 | Read-only proof | snapshot `count(*)` **and** a content hash of `attendance_events`, issue many GETs, re-check — catches UPDATEs a count alone would miss |
 | User mgmt | create → login as the new user → promote → deactivate → reactivate → audit; STAFF **and MANAGER** get 403 on every admin route (managers have no user-management powers by design) |
@@ -77,13 +81,13 @@ DB. Confirm `attendance_events` is still 0 afterwards.
 | Error hygiene (P7) | `password` of 7 chars → 422 whose body does **not** contain it, and whose entries carry only `type`/`loc`/`msg` |
 | Rate limits (P7) | hammer login → run of 401s then a run of 429s, `Retry-After` positive, body exactly `{"detail":"Too many requests"}`; an already-authenticated user unaffected |
 | CORS (P7) | the configured origin echoed exactly (never `*`), `allow-credentials: true`, `X-Request-ID` in `expose-headers`; a foreign origin gets **no** `allow-origin` |
-| Log sweep (P7) | every stderr line parses as JSON; no password, `$argon2`, `Bearer `, DB password, JWT secret, issued **QR nonce** or refresh-token hash appears; failed logins carry `tenant_slug` and **no email**; no access record contains a query string |
+| Log sweep (P7) | every stderr line parses as JSON; no password, `$argon2`, `Bearer `, DB password, JWT secret or refresh-token hash appears; failed logins carry `tenant_slug` and **no email**; no access record contains a query string |
 
 Attendance refusals are HTTP **200 with `success: false`** plus a `reason`, same
 convention as presence. After a run, assert the per-user event sequence strictly
 alternates CHECK_IN/CHECK_OUT, that every `event_timestamp` is **distinct**, and
-that `USED` challenges are at least the number of attendance events (a consumed
-challenge with no event would mean the transaction boundary leaked).
+that every `AUTO_CLOSED` event has no GPS evidence (it was written by the system,
+not a device).
 
 Geofence maths for building coordinates: `lat + meters / 111194.93` moves that
 many metres north of `(12.9716, 77.5946)` with a 150 m radius.
@@ -151,7 +155,7 @@ Then run the same HTTP driver against `:8000`. Migrations are a **deploy step**:
   is a sub-millisecond round trip and they serialise, so a knowingly broken
   implementation passes. Force the interleaving: transaction A acts and holds its
   transaction open, then B attempts the same thing and must block on the row
-  lock. See `tests/test_presence_concurrency.py::interleave`. For *ordering*
+  lock. See `tests/test_attendance_concurrency.py::interleave`. For *ordering*
   hazards the interleaving must be the other way round — B's transaction older
   than A's — see `interleave_with_older_second_transaction`.
 - Pydantic lax mode coerces numeric **strings** (`"12.97"` is accepted for
@@ -176,8 +180,8 @@ Then run the same HTTP driver against `:8000`. Migrations are a **deploy step**:
   `PASSWORD_CHANGED` is a required audit action, so a substring check for
   "password" false-positives on `GET /users/{id}/audit`. Assert the actual
   password strings, `$argon2` and `password_hash` are absent instead. For the log
-  sweep, read the *issued* nonces and token hashes out of the DB and search for
-  those exact values — a generic pattern will not catch a leak.
+  sweep, read the *issued* token hashes out of the DB and search for those exact
+  values — a generic pattern will not catch a leak.
 - The **last-admin 409 is unreachable over HTTP** and that is expected: demoting
   or deactivating an admin requires a *different* TENANT_ADMIN caller, which
   implies a second admin exists, and self-targeting is refused first. Verify the

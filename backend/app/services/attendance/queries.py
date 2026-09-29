@@ -28,14 +28,20 @@ from datetime import UTC, date as date_type, datetime, time, timedelta
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from app.models.attendance_event import AttendanceEvent, AttendanceEventType
+from app.models.attendance_event import (
+    AttendanceEvent,
+    AttendanceEventType,
+    VerificationStatus,
+)
 from app.models.user import User, UserStatus
 from app.services.attendance.results import (
     AttendanceDay,
     AttendanceHistoryPage,
     AttendanceSession,
     DayStatus,
+    MemberHours,
     TeamAttendance,
+    TeamHours,
     TeamMemberDay,
 )
 
@@ -85,6 +91,16 @@ def dates_descending(from_date: date_type, to_date: date_type) -> list[date_type
     """Every date in the inclusive range, newest first."""
     span = (to_date - from_date).days
     return [to_date - timedelta(days=offset) for offset in range(span + 1)]
+
+
+def week_start_of(day: date_type) -> date_type:
+    """Monday of the UTC calendar week containing ``day``."""
+    return day - timedelta(days=day.weekday())
+
+
+def month_start_of(day: date_type) -> date_type:
+    """The 1st of the UTC calendar month containing ``day``."""
+    return day.replace(day=1)
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +194,9 @@ def build_sessions(events: Iterable[AttendanceEvent]) -> list[AttendanceSession]
                     check_out=event.event_timestamp,
                     check_in_event_id=open_event.id if open_event else None,
                     check_out_event_id=event.id,
+                    check_out_auto_closed=(
+                        event.verification_status == VerificationStatus.AUTO_CLOSED
+                    ),
                 )
             )
             open_event = None
@@ -334,6 +353,121 @@ def get_team_day(
         for user in roster
     ]
     return TeamAttendance(date=day, members=members)
+
+
+def _session_hours_in_window(
+    session: AttendanceSession, *, window_start: datetime, window_end: datetime
+) -> float:
+    """Hours ``session`` contributes to the half-open ``[window_start,
+    window_end)`` window, clipping whatever end(s) fall outside it.
+
+    ``check_in is None`` means the session opened before the query range
+    (its opening event fell outside what was loaded) - clip to
+    ``window_start`` rather than counting zero or the unknowable full
+    duration. ``check_out is None`` means the session is still open - clip
+    to ``window_end``, which is ``now`` for the live windows this is called
+    with, so an open session's contribution grows every time this is read
+    rather than being stuck at zero until someone checks out. Both are the
+    same "half-open range, no event double-counted or dropped" discipline
+    :func:`day_bounds` already documents.
+    """
+    start = max(session.check_in or window_start, window_start)
+    end = min(session.check_out or window_end, window_end)
+    if end <= start:
+        return 0.0
+    return (end - start).total_seconds() / 3600
+
+
+def get_team_hours(
+    session: Session,
+    *,
+    tenant_id: uuid.UUID,
+    now: datetime | None = None,
+    include_inactive: bool = False,
+) -> TeamHours:
+    """Hours worked today / this (UTC, Monday-start) week / this calendar
+    month, per active user, as of ``now``.
+
+    One events query for the whole tenant, spanning month-start through
+    ``now`` - the same "roster once, events once, join in Python" shape as
+    :func:`get_team_day`, so this doesn't cost one query per employee either.
+    Today's and this week's totals are cheaper subsets of the same session
+    list, clipped to their own, narrower windows - not separate queries.
+
+    An auto-closed session (``VerificationStatus.AUTO_CLOSED`` - see
+    ``app.services.attendance.service.close_stale_session_if_needed``) is
+    counted like any other: its duration runs to the system-generated
+    checkout, not to ``now``, because that checkout *is* the event that
+    ended the session. Only a session with no checkout at all - the person
+    is genuinely still checked in right now - clips to ``now``.
+    """
+    now = now or datetime.now(UTC)
+    today = utc_date_of(now)
+    week_start = week_start_of(today)
+    month_start = month_start_of(today)
+
+    month_start_dt, _ = day_bounds(month_start)
+    week_start_dt, _ = day_bounds(week_start)
+    today_start_dt, _ = day_bounds(today)
+
+    roster_query = select(User).where(User.tenant_id == tenant_id)
+    if not include_inactive:
+        roster_query = roster_query.where(User.status == UserStatus.ACTIVE)
+    roster = list(
+        session.scalars(roster_query.order_by(User.name, User.employee_code))
+    )
+
+    events = load_events(
+        session,
+        tenant_id=tenant_id,
+        start=month_start_dt,
+        end=now,
+        user_ids=[user.id for user in roster] or None,
+    )
+    events_by_user: dict[uuid.UUID, list[AttendanceEvent]] = {}
+    for event in events:
+        events_by_user.setdefault(event.user_id, []).append(event)
+
+    members = []
+    for user in roster:
+        user_sessions = build_sessions(events_by_user.get(user.id, []))
+        members.append(
+            MemberHours(
+                user_id=user.id,
+                name=user.name,
+                employee_code=user.employee_code,
+                today_hours=round(
+                    sum(
+                        _session_hours_in_window(
+                            s, window_start=today_start_dt, window_end=now
+                        )
+                        for s in user_sessions
+                    ),
+                    2,
+                ),
+                week_hours=round(
+                    sum(
+                        _session_hours_in_window(
+                            s, window_start=week_start_dt, window_end=now
+                        )
+                        for s in user_sessions
+                    ),
+                    2,
+                ),
+                month_hours=round(
+                    sum(
+                        _session_hours_in_window(
+                            s, window_start=month_start_dt, window_end=now
+                        )
+                        for s in user_sessions
+                    ),
+                    2,
+                ),
+            )
+        )
+    return TeamHours(
+        date=today, week_start=week_start, month_start=month_start, members=members
+    )
 
 
 def find_tenant_user(

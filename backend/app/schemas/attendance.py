@@ -28,7 +28,9 @@ from app.services.attendance.results import (
     AttendanceSession,
     AttendanceState,
     DayStatus,
+    MemberHours,
     TeamAttendance,
+    TeamHours,
     TeamMemberDay,
 )
 
@@ -36,8 +38,8 @@ from app.services.attendance.results import (
 class AttendanceActionRequest(PresenceVerificationRequest):
     """Evidence for a check-in or check-out.
 
-    Identical to the presence contract: coordinates, accuracy, challenge id and
-    nonce. Note what is *absent* - no user, no tenant, no timestamp, no event
+    Identical to the presence contract: coordinates, accuracy and a QR
+    token. Note what is *absent* - no user, no tenant, no timestamp, no event
     type and no verdict. Those are all determined by the server, and inherited
     ``extra="forbid"`` turns an attempt to supply one into a 422 rather than a
     silently ignored field.
@@ -82,6 +84,12 @@ class AttendanceActionResponse(BaseModel):
     #: evidence was examined.
     presence: PresenceSummary | None = None
     reason: str | None = None
+    #: True when this call first found the user's previous shift still open
+    #: past the tenant's own `attendance_locations.max_shift_hours` and
+    #: auto-closed it before evaluating this action - see
+    #: `app.services.attendance.service`. A client can use this to show
+    #: "your previous shift was closed automatically".
+    auto_closed_previous_session: bool = False
 
     @classmethod
     def from_outcome(cls, outcome: AttendanceOutcome) -> AttendanceActionResponse:
@@ -111,6 +119,7 @@ class AttendanceActionResponse(BaseModel):
             event_timestamp=outcome.event_timestamp,
             presence=presence,
             reason=outcome.reason.value if outcome.reason is not None else None,
+            auto_closed_previous_session=outcome.auto_closed_previous_session,
         )
 
 
@@ -139,6 +148,11 @@ class AttendanceSessionResponse(BaseModel):
     check_out: datetime | None = None
     check_in_event_id: uuid.UUID | None = None
     check_out_event_id: uuid.UUID | None = None
+    #: True when ``check_out`` was written by the system after the shift sat
+    #: open past the tenant's own `attendance_locations.max_shift_hours`, not
+    #: by the person checking out themselves - render this distinctly from a
+    #: normal checkout.
+    check_out_auto_closed: bool = False
 
     @classmethod
     def from_session(cls, session: AttendanceSession) -> AttendanceSessionResponse:
@@ -147,6 +161,7 @@ class AttendanceSessionResponse(BaseModel):
             check_out=session.check_out,
             check_in_event_id=session.check_in_event_id,
             check_out_event_id=session.check_out_event_id,
+            check_out_auto_closed=session.check_out_auto_closed,
         )
 
 
@@ -316,4 +331,80 @@ class TeamAttendanceResponse(BaseModel):
                 completed=team.count(DayStatus.COMPLETED),
             ),
             employees=[TeamAttendanceMember.from_member(m) for m in team.members],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 13 - hours worked
+# ---------------------------------------------------------------------------
+
+
+class TeamMemberHoursResponse(BaseModel):
+    """One colleague's hours worked, for the tenant dashboard."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: uuid.UUID
+    name: str
+    employee_code: str
+    today_hours: float
+    week_hours: float
+    month_hours: float
+
+    @classmethod
+    def from_member(cls, member: MemberHours) -> TeamMemberHoursResponse:
+        return cls(
+            user_id=member.user_id,
+            name=member.name,
+            employee_code=member.employee_code,
+            today_hours=member.today_hours,
+            week_hours=member.week_hours,
+            month_hours=member.month_hours,
+        )
+
+
+class TeamHoursTotals(BaseModel):
+    """Team-wide totals - the sum of every employee's own figure below."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    total_today_hours: float
+    total_week_hours: float
+    total_month_hours: float
+
+
+class TeamHoursResponse(BaseModel):
+    """Hours worked across the caller's own tenant, as of the request.
+
+    Every figure here is computed fresh from ``attendance_events`` on this
+    request - there is no stored total. A still-open check-in contributes
+    elapsed time up to the moment of the request, so the numbers move on
+    their own between requests without anything writing to them; a session
+    the forgotten-checkout safety net auto-closed contributes up to that
+    system-generated checkout, same as a session the person closed
+    themselves.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: date_type
+    #: Monday (UTC) of the week these ``week_hours`` figures cover.
+    week_start: date_type
+    #: The 1st (UTC) of the month these ``month_hours`` figures cover.
+    month_start: date_type
+    summary: TeamHoursTotals
+    employees: list[TeamMemberHoursResponse]
+
+    @classmethod
+    def from_team_hours(cls, team: TeamHours) -> TeamHoursResponse:
+        return cls(
+            date=team.date,
+            week_start=team.week_start,
+            month_start=team.month_start,
+            summary=TeamHoursTotals(
+                total_today_hours=team.total_today_hours,
+                total_week_hours=team.total_week_hours,
+                total_month_hours=team.total_month_hours,
+            ),
+            employees=[TeamMemberHoursResponse.from_member(m) for m in team.members],
         )

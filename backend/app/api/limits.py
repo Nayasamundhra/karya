@@ -34,7 +34,6 @@ from collections.abc import Callable
 from fastapi import Depends, HTTPException, Request, status
 
 from app.api.deps import CurrentUser
-from app.api.display_deps import CurrentDisplay, DisplayContext
 from app.core.config import settings
 from app.core.rate_limit import (
     RateLimitRule,
@@ -125,21 +124,6 @@ def rate_limit_by_user(select: RuleSelector) -> Callable[[User], None]:
 
     def dependency(current_user: CurrentUser) -> None:
         _enforce(select(get_rules()), "user", str(current_user.id))
-
-    return dependency
-
-
-def rate_limit_by_display(select: RuleSelector) -> Callable[[DisplayContext], None]:
-    """Dependency limiting an endpoint per display-token identity.
-
-    Mirrors `rate_limit_by_user`, keyed on the kiosk's own token id rather
-    than a user id - a display token is not a user (see
-    `app.api.display_deps`), so it gets its own key namespace rather than
-    sharing one with `rate_limit_by_user`.
-    """
-
-    def dependency(display: CurrentDisplay) -> None:
-        _enforce(select(get_rules()), "display", str(display.display_token_id))
 
     return dependency
 
@@ -235,7 +219,6 @@ REFRESH_RATE_LIMIT = Depends(rate_limit_by_ip(lambda rules: rules.refresh))
 PASSWORD_CHANGE_RATE_LIMIT = Depends(
     rate_limit_by_user(lambda rules: rules.password_change)
 )
-QR_CHALLENGE_RATE_LIMIT = Depends(rate_limit_by_user(lambda rules: rules.qr_challenge))
 PRESENCE_RATE_LIMIT = Depends(rate_limit_by_user(lambda rules: rules.presence))
 ATTENDANCE_RATE_LIMIT = Depends(rate_limit_by_user(lambda rules: rules.attendance))
 ADMIN_WRITE_RATE_LIMIT = Depends(rate_limit_by_user(lambda rules: rules.admin_write))
@@ -244,15 +227,4 @@ ONBOARDING_RATE_LIMIT = Depends(rate_limit_by_ip(lambda rules: rules.onboarding)
 #: Public, per-IP, separate budget from onboarding itself (see Settings docstring).
 EMAIL_VERIFICATION_RATE_LIMIT = Depends(
     rate_limit_by_ip(lambda rules: rules.email_verification)
-)
-#: Per display-token identity, not per user - matches "the office display
-#: refreshes roughly twice a minute" reasoning already used for QR_CHALLENGE_RATE_LIMIT.
-DISPLAY_QR_CHALLENGE_RATE_LIMIT = Depends(
-    rate_limit_by_display(lambda rules: rules.qr_challenge)
-)
-#: A kiosk resetting itself is rare (a device being repurposed or a lost
-#: token), so it shares the low-volume admin_write budget rather than
-#: warranting its own config setting.
-DISPLAY_SELF_REVOKE_RATE_LIMIT = Depends(
-    rate_limit_by_display(lambda rules: rules.admin_write)
 )

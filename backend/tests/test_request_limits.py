@@ -133,8 +133,7 @@ def test_the_limit_is_generous_next_to_the_largest_real_payload() -> None:
     """
     largest_realistic = len(
         '{"latitude":12.9716,"longitude":77.5946,"accuracy_meters":12.5,'
-        '"challenge_id":"00000000-0000-0000-0000-000000000000",'
-        '"nonce":"' + "x" * 43 + '"}'
+        '"qr_token":"00000000-0000-0000-0000-000000000000"}'
     )
 
     assert settings.max_request_body_bytes > largest_realistic * 50

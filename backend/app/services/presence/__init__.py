@@ -4,7 +4,7 @@ Module split:
 
 * :mod:`results` - shared enums and result dataclasses (no dependencies)
 * :mod:`gps`     - coordinate validation, haversine distance, geofence check
-* :mod:`qr`      - challenge creation, validation, atomic single-use consumption
+* :mod:`qr`      - resolves a static QR token to the location it identifies
 * :mod:`service` - combines both signals into one decision, plus audit logging
 
 Phase 3 answers only "is Rahul present?". It never writes an ``AttendanceEvent``
@@ -20,9 +20,7 @@ from app.services.presence.results import (
     to_client_reason,
 )
 from app.services.presence.service import (
-    NoActiveAttendanceLocationError,
     get_active_attendance_location,
-    issue_qr_challenge,
     verify_presence,
 )
 
@@ -35,8 +33,6 @@ __all__ = [
     "QRResult",
     "to_client_reason",
     # flows
-    "NoActiveAttendanceLocationError",
     "get_active_attendance_location",
-    "issue_qr_challenge",
     "verify_presence",
 ]

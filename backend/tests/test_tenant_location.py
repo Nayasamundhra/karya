@@ -6,6 +6,7 @@ check-in/out can never succeed - see `app.services.tenant.service`.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 
 from fastapi.testclient import TestClient
@@ -50,11 +51,16 @@ def test_tenant_admin_can_create_the_location(
     body = response.json()
     assert body["name"] == "HQ"
     assert body["geofence_radius_meters"] == 150  # DEFAULT_GEOFENCE_RADIUS_METERS
+    assert body["max_shift_hours"] == 16  # DEFAULT_MAX_SHIFT_HOURS
     assert body["description"] is None  # optional, and never supplied here
+    # A static QR token is assigned at creation - the printed code a staff
+    # phone scans, never a rotating challenge.
+    assert uuid.UUID(body["qr_token"])
 
     read_back = client.get(LOCATION_PATH, headers=auth_header(token))
     assert read_back.status_code == 200
     assert read_back.json()["name"] == "HQ"
+    assert read_back.json()["qr_token"] == body["qr_token"]
 
 
 def test_creating_a_location_with_an_explicit_blank_description_succeeds(
@@ -214,6 +220,66 @@ def test_tenant_admin_can_update_the_geofence_radius(
     )
     assert response.status_code == 200
     assert response.json()["geofence_radius_meters"] == 300
+
+
+def test_tenant_admin_can_set_max_shift_hours_at_creation(
+    client: TestClient,
+    tenant_factory: Callable[..., Tenant],
+    user_factory: Callable[..., User],
+    login: Callable[..., object],
+) -> None:
+    """The forgotten-checkout cutoff is per-tenant, not a global setting - a
+    24h on-call tenant and a 9-to-5 office need different numbers."""
+    tenant = tenant_factory(slug="fresh-co-10")
+    user_factory(tenant, email="admin@fresh-co-10.com", role=UserRole.TENANT_ADMIN)
+    token = login("fresh-co-10", "admin@fresh-co-10.com").json()["access_token"]
+
+    response = client.post(
+        LOCATION_PATH,
+        json={"name": "Hospital Wing", "latitude": 12.9716, "longitude": 77.5946, "max_shift_hours": 30},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["max_shift_hours"] == 30
+
+
+def test_tenant_admin_can_update_max_shift_hours(
+    client: TestClient,
+    tenant_factory: Callable[..., Tenant],
+    location_factory: Callable[..., AttendanceLocation],
+    user_factory: Callable[..., User],
+    login: Callable[..., object],
+) -> None:
+    tenant = tenant_factory(slug="fresh-co-11")
+    location_factory(tenant, max_shift_hours=16)
+    user_factory(tenant, email="admin@fresh-co-11.com", role=UserRole.TENANT_ADMIN)
+    token = login("fresh-co-11", "admin@fresh-co-11.com").json()["access_token"]
+
+    response = client.patch(
+        LOCATION_PATH, json={"max_shift_hours": 24}, headers=auth_header(token)
+    )
+    assert response.status_code == 200
+    assert response.json()["max_shift_hours"] == 24
+
+
+def test_max_shift_hours_out_of_bounds_is_rejected(
+    client: TestClient,
+    tenant_factory: Callable[..., Tenant],
+    user_factory: Callable[..., User],
+    login: Callable[..., object],
+) -> None:
+    tenant = tenant_factory(slug="fresh-co-12")
+    user_factory(tenant, email="admin@fresh-co-12.com", role=UserRole.TENANT_ADMIN)
+    token = login("fresh-co-12", "admin@fresh-co-12.com").json()["access_token"]
+
+    for value in (0, -1, 73):
+        response = client.post(
+            LOCATION_PATH,
+            json={"name": "HQ", "latitude": 12.9716, "longitude": 77.5946, "max_shift_hours": value},
+            headers=auth_header(token),
+        )
+        assert response.status_code == 422, value
 
 
 def test_out_of_range_coordinates_are_rejected(

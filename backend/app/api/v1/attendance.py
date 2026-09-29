@@ -6,8 +6,8 @@ dependency; the whole lifecycle lives in
 service on every call.
 
 Both handlers commit exactly once, at the end. That single commit is the
-transaction boundary covering the state check, the QR consumption and the
-attendance row - so the three cannot be persisted separately.
+transaction boundary covering the state check, any stale-session auto-close
+and the attendance row - so they cannot be persisted separately.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from app.schemas.attendance import (
     AttendanceHistoryResponse,
     AttendanceTodayResponse,
     TeamAttendanceResponse,
+    TeamHoursResponse,
 )
 from app.services.attendance import queries as attendance_queries
 from app.services.attendance import service as attendance_service
@@ -58,7 +59,8 @@ def _record(
     A refused attempt is committed too: it wrote an audit row and nothing else,
     and that row is the record that somebody tried. Only an unexpected exception
     skips the commit, in which case the session closes without one and
-    PostgreSQL discards every write - including any QR consumption.
+    PostgreSQL discards every write - including any auto-close of a stale
+    session.
     """
     outcome = action(
         session,
@@ -67,8 +69,7 @@ def _record(
         latitude=payload.latitude,
         longitude=payload.longitude,
         accuracy_meters=payload.accuracy_meters,
-        challenge_id=payload.challenge_id,
-        nonce=payload.nonce,
+        qr_token=payload.qr_token,
     )
     session.commit()
     return AttendanceActionResponse.from_outcome(outcome)
@@ -94,8 +95,7 @@ def check_in(
     Presence is verified here as part of the action - a prior call to
     ``/presence/verify`` neither helps nor is trusted. The user must currently
     be ``NOT_CHECKED_IN``; a duplicate attempt is refused with
-    ``ALREADY_CHECKED_IN`` and, deliberately, without consuming the QR
-    challenge.
+    ``ALREADY_CHECKED_IN``.
     """
     return _record(session, current_user, payload, attendance_service.check_in)
 
@@ -115,8 +115,7 @@ def check_out(
     """Record a CHECK_OUT for the authenticated user.
 
     Requires a preceding CHECK_IN: without one the attempt is refused with
-    ``NOT_CHECKED_IN``. Needs its own fresh QR challenge, since the one that
-    authorised the check-in was consumed by it.
+    ``NOT_CHECKED_IN``.
     """
     return _record(session, current_user, payload, attendance_service.check_out)
 
@@ -267,6 +266,28 @@ def read_team_attendance(
         session, tenant_id=current_user.tenant_id, day=day
     )
     return TeamAttendanceResponse.from_team(team)
+
+
+@router.get(
+    "/team/hours",
+    response_model=TeamHoursResponse,
+    summary="Hours worked today/this week/this month across the caller's tenant",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+    },
+)
+def read_team_hours(session: DbSession, current_user: TenantViewer) -> TeamHoursResponse:
+    """Every active user's hours worked, computed fresh from events.
+
+    Same tenant-viewer gate as ``/team/today``. See
+    ``app.services.attendance.queries.get_team_hours`` for exactly how an
+    open or auto-closed session is counted.
+    """
+    team_hours = attendance_queries.get_team_hours(
+        session, tenant_id=current_user.tenant_id
+    )
+    return TeamHoursResponse.from_team_hours(team_hours)
 
 
 @router.get(

@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from app.models.attendance_event import AttendanceEvent
     from app.models.attendance_location import AttendanceLocation
     from app.models.audit_log import AuditLog
-    from app.models.qr_challenge import QRChallenge
     from app.models.refresh_token import RefreshToken
     from app.models.user import User
 
@@ -55,11 +54,6 @@ class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     attendance_events: Mapped[list[AttendanceEvent]] = relationship(
         back_populates="tenant",
         passive_deletes="all",
-    )
-    # QR challenges are short-lived, disposable artefacts -> DB-level CASCADE.
-    qr_challenges: Mapped[list[QRChallenge]] = relationship(
-        back_populates="tenant",
-        passive_deletes=True,
     )
     # Audit logs are retained; the FK is nulled rather than deleted.
     audit_logs: Mapped[list[AuditLog]] = relationship(

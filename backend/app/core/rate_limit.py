@@ -8,7 +8,7 @@ protects against:
 
 * It **does** stop a brute-force or request-storm from one client against one
   process. That is the common case: a script hammering ``/auth/login``, a mobile
-  client stuck in a retry loop, someone flooding QR issuance.
+  client stuck in a retry loop, someone hammering ``/presence/verify``.
 * It **does not** give a shared limit across multiple API instances. With N
   instances behind a load balancer an attacker effectively gets N times the
   budget, because each process counts only what it saw. A genuinely distributed
@@ -285,9 +285,6 @@ class Rules:
             "password_change",
             config.rate_limit_password_change_per_15_min,
             FIFTEEN_MINUTES,
-        )
-        self.qr_challenge = RateLimitRule(
-            "qr_challenge", config.rate_limit_qr_challenge_per_minute, MINUTE
         )
         self.presence = RateLimitRule(
             "presence", config.rate_limit_presence_per_minute, MINUTE

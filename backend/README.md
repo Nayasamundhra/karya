@@ -8,11 +8,21 @@ mobile-first client, and presence is verified rather than merely self-reported.
 
 The verification model combines:
 
-- **GPS presence** — is the device inside the site's geofence?
-- **Dynamic QR presence** — did the device scan a short-lived, one-time nonce
-  displayed at the site?
+- **GPS presence** — is the device inside the site's geofence? This is the
+  signal that actually gates a check-in/out.
+- **Static QR presence** — did the device scan the one printed/displayed
+  code for this location? The QR never expires and is never consumed; it
+  identifies *which* location to test the GPS reading against, and does not
+  by itself prove proximity to a screen the way the original rotating,
+  single-use challenge did. See §8b for the full history and trade-off
+  (this replaced the rotating challenge).
 
 and, in future, additional signals (Wi-Fi, device integrity, risk scoring).
+
+A **forgotten checkout** (`CHECK_IN` left open past the tenant's own
+`attendance_locations.max_shift_hours`) is auto-closed with a
+system-generated `CHECK_OUT` event, tagged `VerificationStatus.AUTO_CLOSED`
+— see §8c.
 
 ## 2. Current project phase
 
@@ -20,26 +30,34 @@ and, in future, additional signals (Wi-Fi, device integrity, risk scoring).
 | --- | --- | --- |
 | **1** | Database & backend foundation — six entities, relationships, constraints, indexes, migration, Dockerised PostgreSQL, `GET /health` | ✅ Complete |
 | **2** | Authentication, multi-tenant security, RBAC foundation | ✅ Complete |
-| **3** | Presence verification — GPS + geofencing + dynamic QR | ✅ Complete |
+| **3** | Presence verification — GPS + geofencing + dynamic QR (superseded by Phase 12) | ✅ Complete |
 | **4** | Attendance check-in / check-out | ✅ Complete |
 | **5** | Attendance history, daily summary, tenant dashboard APIs | ✅ Complete |
 | **6** | User, tenant and account management | ✅ Complete |
 | **7** | Production hardening & API readiness | ✅ Complete |
 | 8–10 | Frontend / PWA architecture, staff attendance experience, manager/admin dashboards | ✅ Complete (see `frontend/`; `frontend/README.md` still describes only Phase 8) |
-| **11** | Tenant self-service onboarding, email verification, office-display (kiosk) mode | ✅ Complete |
+| **11** | Tenant self-service onboarding, email verification, office-display (kiosk) mode | ✅ Complete (kiosk mode retired in Phase 12) |
+| **12** | Static per-location QR (replaces the rotating challenge and the kiosk mechanism Phase 11 built for it) + forgotten-checkout auto-close | ✅ Complete |
 
 Phase 2 adds the identity and authorization layer every later feature depends
 on: Argon2id password hashing, JWT access tokens, revocable refresh tokens with
 mandatory rotation, tenant isolation, and reusable role dependencies. It added
 exactly one table (`refresh_tokens`) and changed no Phase 1 schema.
 
-Phase 3 adds presence verification: server-side GPS geofencing plus single-use
-dynamic QR challenges. It added **no tables and no migration** — it reuses the
-Phase 1 `attendance_locations`, `qr_challenges` and `audit_logs` tables.
+Phase 3 originally added presence verification via server-side GPS geofencing
+plus single-use, rotating dynamic QR challenges (a dedicated `qr_challenges`
+table). **Phase 12 replaced that model**: the QR is now a single static,
+never-expiring token per `attendance_locations` row (`qr_token`), GPS became
+the only signal that actually gates a check-in, and `qr_challenges` — along
+with the `display_tokens` table Phase 11 built for the kiosk mechanism that
+served it — was dropped. See §8b for the current design and the trade-off it
+accepts.
 
 Phase 4 adds the attendance lifecycle — check-in and check-out — on top of that
-verification. Also **no tables and no migration**: it writes to the Phase 1
-`attendance_events` table, which already had every column needed.
+verification. Originally **no tables and no migration** (it only wrote to the
+Phase 1 `attendance_events` table); Phase 12 added the auto-close safety net
+on top, which writes to the same table with no schema change either — see
+§8c.
 
 Phase 5 makes attendance *readable*: self-service history, daily summaries and a
 tenant dashboard. **No new tables** — every view is derived from
@@ -67,13 +85,16 @@ Phase 11 adds tenant self-service: an organization creates itself and its
 first administrator through the one public, unauthenticated write endpoint in
 the API (`POST /onboarding/tenants`), the administrator verifies by email
 before the account is usable at all, and a tenant can then set up its own
-attendance location and mint credentials for unattended office-display
-kiosks that show a self-refreshing check-in QR code with no phone or login
-involved. It adds four tables (`email_verification_tokens`, `display_tokens`,
-plus the migrations that add them and an `attendance_locations.description`
-column) and one dependency-free outbound-email mechanism (stdlib `smtplib`,
-degrading to a structured log line when `SMTP_HOST` is unset — see
-`app/services/email/mailer.py`).
+attendance location. Phase 11 also added mint-able credentials for
+unattended office-display kiosks that showed a self-refreshing check-in QR
+code with no phone or login involved (`display_tokens`) — **Phase 12 removed
+that kiosk mechanism entirely**, once the QR it served became static and no
+longer needed a screen to keep re-fetching it. Phase 11 added two tables
+(`email_verification_tokens`, `display_tokens` — the second later dropped by
+Phase 12), plus the migrations that added them and an
+`attendance_locations.description` column, and one dependency-free
+outbound-email mechanism (stdlib `smtplib`, degrading to a structured log
+line when `SMTP_HOST` is unset — see `app/services/email/mailer.py`).
 
 See [§10 — Not implemented yet](#10-what-is-intentionally-not-implemented-yet).
 
@@ -189,7 +210,6 @@ cp .env.example .env            # PowerShell: Copy-Item .env.example .env
 | `REFRESH_TOKEN_EXPIRE_DAYS`   | Default `30`                               |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins; wildcard rejected  |
 | `MAX_GPS_ACCURACY_METERS` | Worst accepted GPS accuracy. Default `100`     |
-| `QR_CHALLENGE_TTL_SECONDS` | QR challenge lifetime. Default `30`          |
 | `DOCS_ENABLED`      | Serve `/docs`, `/redoc`, `/openapi.json`. Default `true` |
 | `LOG_LEVEL` / `LOG_FORMAT` | Default `INFO` / `json` (or `console`)      |
 | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW` | Pool bounds. Default `5` / `10`      |
@@ -302,11 +322,10 @@ Coverage by area:
 | `test_rbac.py` | `require_roles`, no hierarchy, no escalation surface |
 | `test_config.py` | Missing/short secret, CORS wildcard, lifetimes, presence thresholds |
 | `test_presence_gps.py` | Coordinate validation, haversine correctness, geofencing, accuracy |
-| `test_presence_qr.py` | Issuance authorization, nonce quality, expiry, replay, bindings |
-| `test_presence_concurrency.py` | Forced-interleaving proof that only one caller consumes a QR |
+| `test_presence_qr.py` | Static QR-token resolution, tenant scoping, regeneration (Phase 12) |
 | `test_presence_verify.py` | End-to-end presence, spoofing attempts, tenant isolation, no attendance events |
-| `test_attendance.py` | Check-in/out lifecycle, state transitions, spoofing, QR single-use across endpoints |
-| `test_attendance_concurrency.py` | Forced-interleaving proof that concurrent check-ins produce exactly one event |
+| `test_attendance.py` | Check-in/out lifecycle, state transitions, spoofing, the static QR reused across both |
+| `test_attendance_concurrency.py` | Forced-interleaving proof for concurrent check-ins **and** for the Phase 12 auto-close race |
 | `test_attendance_read.py` | Self-service reads, session shaping, UTC boundaries, pagination, date limits |
 | `test_attendance_team.py` | RBAC, tenant dashboard, summary arithmetic, cross-tenant 404s, N+1 guard |
 | `test_users_admin.py` | Creation, listing, search escaping, profile, role, lifecycle, audit |
@@ -326,10 +345,11 @@ Coverage by area:
 `test_health.py` proves liveness never queries the database by making any database
 access raise, so the property fails loudly if `/health` ever grows a query.
 
-The two `*_concurrency.py` modules are the only ones that commit to the database
+The `*_concurrency.py` modules are the only ones that commit to the database
 (real concurrency needs separate connections); each deletes its own rows in
-teardown. Both also contain a deliberately naive implementation and assert it
-*would* break — double-consuming a QR, or double-inserting a CHECK_IN — so if the
+teardown. Each also contains a deliberately naive implementation and asserts it
+*would* break — double-inserting a CHECK_IN, or double-inserting an
+AUTO_CLOSED checkout for the same stale session (Phase 12) — so if the
 harness ever stops creating real lock contention those tests fail rather than the
 suite quietly passing. Phase 7 added a third pair in the same style, for event
 *ordering* rather than event count: see
@@ -375,8 +395,7 @@ Authorized Operation        require_roles(...) + tenant_scoped_select(...)
 | `POST` | `/api/v1/auth/refresh` | refresh token in body | Rotate → new token pair |
 | `POST` | `/api/v1/auth/logout` | refresh token in body | Revoke that session (204) |
 | `GET`  | `/api/v1/auth/me` | Bearer access token | The caller's own profile |
-| `POST` | `/api/v1/presence/qr/challenge` | MANAGER / TENANT_ADMIN | Issue a QR challenge (Phase 3) |
-| `POST` | `/api/v1/presence/verify` | Any active user | Verify presence (Phase 3) |
+| `POST` | `/api/v1/presence/verify` | Any active user | Verify presence — GPS + static QR (Phase 3, redesigned Phase 12) |
 | `POST` | `/api/v1/attendance/check-in` | Any active user | Check in (Phase 4) |
 | `POST` | `/api/v1/attendance/check-out` | Any active user | Check out (Phase 4) |
 | `GET` | `/api/v1/attendance/me` | Any active user | Own attendance for a day (Phase 5) |
@@ -397,10 +416,7 @@ Authorized Operation        require_roles(...) + tenant_scoped_select(...)
 | `POST` | `/api/v1/onboarding/verify-email` | — (public, token in body) | Activate the admin and sign in (Phase 11) |
 | `POST` | `/api/v1/onboarding/resend-verification` | — (public) | Issue a fresh verification link (Phase 11) |
 | `GET`/`POST`/`PATCH` | `/api/v1/tenant/me/location` | Any active user / TENANT_ADMIN | Read / set up / update the tenant's attendance location (Phase 11) |
-| `POST`/`GET` | `/api/v1/tenant/display-tokens` | MANAGER / TENANT_ADMIN | Mint / list office-display kiosk credentials (Phase 11) |
-| `POST` | `/api/v1/tenant/display-tokens/{id}/revoke` | MANAGER / TENANT_ADMIN | Revoke a kiosk's credential (Phase 11) |
-| `POST` | `/api/v1/display/revoke-self` | — (display token, not a user) | A kiosk revokes its own credential (Phase 11) |
-| `POST` | `/api/v1/presence/qr/challenge/display` | — (display token, not a user) | A kiosk mints its own QR challenge (Phase 11) |
+| `POST` | `/api/v1/tenant/me/location/qr-token/regenerate` | TENANT_ADMIN | Mint a fresh static QR, invalidating the old one (Phase 12) |
 
 All appear in the OpenAPI docs at `/docs`.
 
@@ -535,19 +551,31 @@ Staff Phone
     PRESENCE_VERIFIED
 ```
 
-### Why two signals, and why both are mandatory
+### Why two signals — and the trade-off Phase 12 accepted
 
 | Signal | What it proves | How it can fail alone |
 | --- | --- | --- |
 | **GPS** | The device *reports* coordinates inside the geofence | Coordinates can be faked on a rooted or developer-mode device |
-| **Dynamic QR** | Someone read a code that existed for ~30 s on the office display | A photographed code could be shared — but only for seconds, and only once |
+| **Static QR** (Phase 12) | The scan resolves to this tenant's own location | The printed code can be photographed and shared indefinitely — nothing ages it out except an admin regenerating it |
 
-Neither is sufficient. GPS is an **evidence signal, not proof**: this codebase
-performs rigorous server-side validation but cannot detect a spoofed location,
-and it does not claim to. The QR compensates by requiring physical proximity to
-a rotating display at the moment of the attempt. Conversely a shared QR code is
-useless without also being inside the geofence. Requiring both means an attacker
-must defeat two independent mechanisms at the same instant.
+**Through Phase 11**, the QR rotated every `QR_CHALLENGE_TTL_SECONDS` (30s)
+and was single-use, so a photographed code was worthless within seconds —
+genuinely a second, independent signal on top of GPS. **Phase 12 replaced
+that** with one static, never-expiring token per `attendance_locations` row:
+the client explicitly traded away that replay defense for not needing a
+kiosk screen running continuously at every office. GPS is now the only
+signal that actually gates a check-in; the QR's remaining job is only to
+identify *which* location a scan is against (relevant once a tenant has more
+than one) and to require the deliberate physical act of walking up to the
+poster and scanning it — not to prove that scan happened recently.
+
+This is a real security posture change, not a wash: GPS alone is an
+**evidence signal, not proof** (spoofable on a rooted/dev-mode device, which
+this codebase does not detect), and the only compensating control left for a
+leaked/over-shared static QR is `POST /tenant/me/location/qr-token/regenerate`
+(TENANT_ADMIN-only) — a deliberate admin action, not automatic expiry. Device
+attestation, which would raise the cost of GPS spoofing materially, remains
+intentionally deferred to a later phase, same as before.
 
 **Wi-Fi is deliberately not implemented.** It was specified as optional, and a
 third signal adds real cost — SSID/BSSID collection is platform-restricted,
@@ -591,84 +619,45 @@ GPS valid  ⟺  coordinates well-formed
 - The distance is returned even on failure, so a rejection is diagnosable
   ("you were 350 m away") rather than an opaque no.
 
-### How dynamic QR challenges work
+### How the static QR works (Phase 12)
 
 ```
-Server                                   Office display        Staff phone
-  │ POST /presence/qr/challenge (MANAGER/TENANT_ADMIN)
-  │──── nonce = secrets.token_urlsafe(32) ─────►│
-  │     expires_at = now() + TTL               │ renders QR
-  │                                            │  {challenge_id, nonce}
-  │                                            │◄──── scan ──────│
-  │◄──── POST /presence/verify {gps, challenge_id, nonce} ────────│
-  │ atomic single-use consume
+Tenant admin sets up/prints                              Staff phone
+  attendance_locations.qr_token
+  (secrets.token_urlsafe(32), generated once)
+       │
+       │  QR image encodes {"qr_token": "…"} — printed, stuck on a wall
+       │
+       └──────────────────────────────────────────────────▶ scan
+                                                              │
+                                                              ▼
+                                            POST /presence/verify {gps, qr_token}
+                                                              │
+                                                              ▼
+                                      resolve_location_by_qr_token(qr_token)
+                                      → location, if it belongs to this tenant
+                                              (read-only lookup — never consumed)
 ```
 
-- **Nonce**: 32 bytes from the OS CSPRNG (`secrets`), url-safe encoded to 43
-  characters. Not a timestamp, counter, sequence or bare UUID — the code is
-  displayed publicly, so a predictable generator would be forgeable. `random` is
-  unsuitable: its entire future output is recoverable from a few observed values.
-- **Payload**: only `challenge_id` and `nonce`. No JWT, no credentials, no
-  personal data, no coordinates. A signed token would be self-validating and so
-  could not be revoked or marked used without a server record anyway — and the
-  record is what gives replay protection, so the token would add only size.
-- **Only MANAGER and TENANT_ADMIN may issue challenges.** STAFF cannot: anyone
-  who can mint a code could mint one away from the office and redeem it
-  themselves, defeating the second signal entirely.
-- Previous challenges are **not** revoked on issue. The display fetches the next
-  code slightly before the current one lapses, so they overlap briefly; revoking
-  eagerly would break anyone mid-scan. Old codes simply expire.
-
-### QR expiration
-
-`expires_at = server_now() + QR_CHALLENGE_TTL_SECONDS` (default 30 s). The client
-neither sends nor influences it. A challenge is rejected once
-`server_time >= expires_at`; the server's UTC clock is authoritative and no
-client-supplied time is read anywhere.
-
-Expiration is **lazy**: when a request notices a lapsed-but-still-`ACTIVE` row it
-flips the status to `EXPIRED` as bookkeeping. No background worker is required,
-because the authoritative gate is the timestamp comparison — in the read check
-*and* inside the consuming `UPDATE` — never the status column.
-
-### QR replay protection
-
-A challenge is strictly single-use, enforced by one statement:
-
-```sql
-UPDATE qr_challenges SET status='USED', used_at=now()
-WHERE id=… AND tenant_id=… AND location_id=… AND nonce=…
-  AND status='ACTIVE' AND used_at IS NULL AND expires_at > now()
-```
-
-Every precondition is re-checked *inside the write*, so the check and the claim
-cannot be separated by another transaction — a compare-and-swap. Under
-PostgreSQL's default **READ COMMITTED** isolation two concurrent such statements
-serialise: the second blocks until the first commits, re-evaluates its `WHERE`
-against the newly committed row, sees `status='USED'` and matches zero rows.
-Exactly one caller can ever win.
-
-A read-then-write (`SELECT` … then `UPDATE`) would leave both transactions
-believing the challenge was `ACTIVE`. The test suite proves this is not
-theoretical: it forces the interleaving and asserts a deliberately naive
-implementation double-consumes while the real one does not.
-
-Rows are **revoked/used rather than deleted**, so a replayed code is reported as
-`QR_ALREADY_USED` instead of indistinguishable from a code that never existed.
-
-### Ordering: why the QR is consumed last
-
-```
-1. resolve the tenant's active location
-2. evaluate GPS
-3. evaluate the QR  (read-only — nothing consumed)
-4. if BOTH passed → atomically consume the QR
-```
-
-If the QR were spent before the GPS check, someone standing 500 m away would
-destroy the office's current code on every attempt — a trivial denial of service
-against everyone legitimately present. So a rejected attempt leaves the challenge
-untouched and still usable. A test asserts exactly this.
+- **Token**: a `uuid.UUID` stored on `attendance_locations.qr_token`, unique,
+  generated once at location creation (`gen_random_uuid()` server default) and
+  never rotated automatically. Unlike the old nonce, it is not meant to be
+  secret — it is printed on a poster on purpose — so there is no compare-time
+  side-channel concern in resolving it.
+- **Payload**: only `qr_token`. No JWT, no credentials, no personal data, no
+  coordinates.
+- **Resolution is a plain lookup, not a consume.** `app.services.presence.qr.resolve_location_by_qr_token`
+  is a `SELECT … WHERE qr_token = … AND status = 'ACTIVE'` — no `UPDATE`, no
+  single-use state, because nothing needs to be "spent." The same code
+  authorises every check-in and check-out, indefinitely.
+- **Regeneration is the only lever against a leaked/over-shared code.**
+  `POST /tenant/me/location/qr-token/regenerate` (TENANT_ADMIN-only) mints a
+  fresh `uuid.uuid4()` and the old value stops resolving immediately — a
+  deliberate action, not something that ages out on its own.
+- **Issuing/kiosk infrastructure was removed, not repurposed.** Phase 11's
+  `qr_challenges` table, `display_tokens` table, the office-display kiosk API
+  and its frontend were all dropped in the same migration/PR — none of them
+  have a purpose once the QR doesn't rotate.
 
 ### Tenant isolation
 
@@ -676,15 +665,16 @@ Unchanged from Phase 2 and extended to every new query:
 
 - The attendance location is resolved by a tenant-scoped query using
   `current_user.tenant_id`.
-- A challenge is validated against both `tenant_id` **and** `location_id`.
-  Location binding is enforced even though V1 has one site per tenant, so a code
-  cannot cross sites once multiple locations exist.
+- A scanned `qr_token` resolves straight to its owning location — the lookup
+  itself is what binds it to a site. Once multiple locations per tenant
+  exist, this is what stops a code from one site authorising a scan claimed
+  against another.
 - Neither endpoint accepts a tenant or user identifier. `POST /presence/verify`
   takes no identity fields at all, and `extra="forbid"` turns an attempt to send
   one into a 422.
 - **Cross-tenant reasons are collapsed in responses.** Internally the service
   distinguishes `QR_TENANT_MISMATCH` from `QR_NOT_FOUND`; the API reports both as
-  `QR_NOT_FOUND`, because confirming "that id belongs to another tenant" is a
+  `QR_NOT_FOUND`, because confirming "that token belongs to another tenant" is a
   cross-tenant existence oracle. The precise reason *is* recorded in the audit
   log, where repeated mismatches are a genuine signal that someone is probing.
 
@@ -693,7 +683,7 @@ Unchanged from Phase 2 and extended to every new query:
 ```
 POST /api/v1/presence/verify        Authorization: Bearer <access token>
 { "latitude": 12.9723, "longitude": 77.5946,
-  "accuracy_meters": 12.5, "challenge_id": "…", "nonce": "…" }
+  "accuracy_meters": 12.5, "qr_token": "…" }
 ```
 
 Rejections return **200 with `verified: false`**, not a 4xx: the request was
@@ -715,8 +705,9 @@ unauthenticated, 422 malformed or smuggled fields.
 
 Both signals are always reported, so one round trip tells the user everything
 that is wrong. Failure reasons: `NO_ACTIVE_ATTENDANCE_LOCATION`, `GPS_INVALID`,
-`GPS_ACCURACY_TOO_LOW`, `OUTSIDE_GEOFENCE`, `QR_NOT_FOUND`, `QR_EXPIRED`,
-`QR_ALREADY_USED`, `QR_REVOKED`, `QR_NONCE_MISMATCH`.
+`GPS_ACCURACY_TOO_LOW`, `OUTSIDE_GEOFENCE`, `QR_NOT_FOUND`. (`QR_EXPIRED`,
+`QR_ALREADY_USED`, `QR_REVOKED` and `QR_NONCE_MISMATCH` no longer exist — there
+is nothing left to expire, consume, revoke or forge a nonce for.)
 
 **The office's stored coordinates are never returned** — a distance is all the
 client needs, and revealing the exact position would help someone spoof it.
@@ -728,17 +719,15 @@ client needs, and revealing the exact position would help someone spoof it.
 | `gps_verified` / `qr_verified` / `presence_verified` in the body | 422 |
 | `distance_meters` in the body | 422 — the server computes its own |
 | `tenant_id` / `user_id` in body, query or header | 422 or ignored |
-| Choose `expires_at` for a challenge | Ignored; server sets it |
-| Reuse a consumed challenge | `QR_ALREADY_USED` |
-| Redeem another tenant's challenge | `QR_NOT_FOUND` |
+| Scan another tenant's QR token | `QR_NOT_FOUND` |
+| Regenerate a location's QR as anyone but TENANT_ADMIN | 403 |
 
 ### Audit logging
 
-- `QR_CHALLENGE_CREATED` — on every issue, with `challenge_id`, `location_id`,
-  `expires_at`, `ttl_seconds`. **The nonce is never logged**: it is the secret
-  the challenge protects, and the id is enough to correlate issue with redemption.
 - `PRESENCE_VERIFICATION_FAILED` — on every rejection, with the internal failure
   reason, distance and accuracy.
+- `ATTENDANCE_LOCATION_QR_TOKEN_REGENERATED` — on every regeneration, with the
+  location id (never the token value itself).
 
 Successes are *not* audited: a rejection is the security-relevant event, whereas a
 success will be recorded by Phase 4 as an attendance event carrying the same
@@ -753,7 +742,7 @@ rather than restated at each call site. Phase 3 itself never writes that column.
 
 ```json
 {"gps": {"verified": true, "distance_meters": 73.0, "accuracy_meters": 12.5},
- "qr":  {"verified": true, "challenge_id": "…"}}
+ "qr":  {"verified": true, "location_id": "…"}}
 ```
 
 ## 8c. Attendance lifecycle (Phase 4)
@@ -766,14 +755,17 @@ code that writes to `attendance_events`.
 CHECK-IN                             CHECK-OUT
 Authentication                       Authentication
       ↓                                    ↓
+Lock the user row                    Lock the user row
+      ↓                                    ↓
+Auto-close a stale session,          Auto-close a stale session,
+  if one is found (Phase 12)           if one is found (Phase 12)
+      ↓                                    ↓
 Attendance state  (must be            Attendance state  (must be
   NOT_CHECKED_IN)                       CHECKED_IN)
       ↓                                    ↓
 GPS verification                     GPS verification
       ↓                                    ↓
-QR verification                      QR verification
-      ↓                                    ↓
-Atomic QR consumption                Atomic QR consumption
+QR resolution (read-only lookup)     QR resolution (read-only lookup)
       ↓                                    ↓
 Attendance event (CHECK_IN)          Attendance event (CHECK_OUT)
       ↓                                    ↓
@@ -787,8 +779,8 @@ Commit                               Commit
 | `POST` | `/api/v1/attendance/check-in` | Any active user | Record a CHECK_IN |
 | `POST` | `/api/v1/attendance/check-out` | Any active user | Record a CHECK_OUT |
 
-Both take the **same body as `/presence/verify`** — coordinates, accuracy,
-challenge id, nonce — because the schema is literally inherited from it.
+Both take the **same body as `/presence/verify`** — coordinates, accuracy, and
+a `qr_token` — because the schema is literally inherited from it.
 
 ```json
 { "success": true, "event_type": "CHECK_IN", "status": "CHECKED_IN",
@@ -810,9 +802,11 @@ what lets a client say *"you are 350 m away"* rather than just *"failed"*.
 verified, check me in" — there is no field in which to say it. Every check-in
 and check-out calls the Phase 3 service itself.
 
-Even replaying the *same challenge* fails: `/presence/verify` consumes it, so
-presenting it again to check-in returns `QR_ALREADY_USED`. There is no path from
-an earlier verification to an attendance event.
+A prior `/presence/verify` call is not itself an attendance event, and calling
+it first changes nothing about what happens next — there is no "I was already
+verified" field to submit. (Through Phase 11 replaying the same *challenge*
+also failed outright, since verifying consumed it; Phase 12's static QR is
+reusable, so that specific defense is gone — see §8b's trade-off discussion.)
 
 `app/services/attendance/service.py` contains **no GPS or QR logic at all** — it
 calls `presence_service.verify_presence`, which calls the GPS and QR modules.
@@ -862,20 +856,18 @@ One transaction per request, committed once in the route:
 
 ```
 BEGIN
-  lock the user row          ← SELECT … FOR UPDATE
+  lock the user row              ← SELECT … FOR UPDATE
+  auto-close a stale session, if any found (Phase 12)
   derive + validate state
-  verify presence            ← GPS, then QR
-  consume the QR challenge   ← atomic conditional UPDATE
+  verify presence                ← GPS, then a read-only QR lookup
   INSERT the attendance event
   INSERT the audit row
 COMMIT
 ```
 
-Nothing is committed separately, so the database can never hold **a consumed
-challenge with no attendance event**. If anything raises, the session closes
-without a commit and PostgreSQL discards the lot — including the consumption. A
-live run confirmed the invariant: 8 attendance events, exactly 8 challenges in
-`USED`.
+Nothing is committed separately. If anything raises, the session closes
+without a commit and PostgreSQL discards the lot, including any auto-close
+insert.
 
 ### How duplicate check-ins and check-outs are prevented
 
@@ -895,25 +887,29 @@ there may be no attendance rows to lock, and PostgreSQL offers no gap lock under
 READ COMMITTED. The user row always exists, so it is a reliable mutex keyed by
 exactly the right thing.
 
-**Lock order is always user → QR challenge**, so two transactions can never hold
-each other's next lock and deadlock.
+The QR resolution itself takes no lock (it is a read-only lookup, not a
+consume), so lock order is simply "the user row, once" — there is no second
+lock to order against and therefore no deadlock risk from this path.
 
-### How QR replay stays prevented
+### The static QR is reusable — nothing to prevent replaying it
 
-Untouched from Phase 3 — the same atomic conditional UPDATE, reached through the
-same service. Two extra guarantees hold across the new endpoints:
-
-- A challenge spent on a check-in **cannot** be reused for the check-out; each
-  action needs its own fresh code.
-- A challenge spent by `/presence/verify` cannot then authorise attendance.
+Through Phase 11 this section described the atomic conditional `UPDATE` that
+made a QR challenge single-use, and the guarantee that a challenge spent on a
+check-in couldn't be reused for the check-out. Phase 12's QR is static: the
+same code legitimately authorises every check-in and check-out a tenant ever
+makes, so there is no replay to prevent and nothing here to test for it
+staying prevented. What still needs preventing — and is — is a *stale
+session* being left open indefinitely; see "Forgotten-checkout auto-close"
+below.
 
 ### State is validated before evidence is examined
 
-The order matters. A duplicate check-in is refused **before** the QR is looked
-at, so it does not consume the office's current challenge — the same reasoning
-Phase 3 applies to GPS failures. Otherwise a user tapping the button twice would
-destroy the code for everyone queuing behind them. A test asserts the challenge
-survives a rejected duplicate and still works for the legitimate next action.
+The order matters. A duplicate check-in is refused **before** GPS/QR are
+examined at all, so a spurious retry does no unnecessary work and writes no
+extra audit noise. (Through Phase 11 this ordering additionally protected a
+shared, single-use challenge from being burned by a rejected duplicate; the
+QR being static now means that specific hazard no longer exists, but the
+ordering itself is still correct and unchanged.)
 
 ### Verification metadata
 
@@ -924,18 +920,17 @@ than restated:
 ```json
 {"presence": {"verified": true},
  "gps": {"verified": true, "distance_meters": 73.0, "accuracy_meters": 12.5},
- "qr":  {"verified": true, "challenge_id": "…"},
+ "qr":  {"verified": true, "location_id": "…"},
  "attendance_state": "CHECKED_IN"}
 ```
 
-The `challenge_id` is recorded, **never the nonce** — the id is enough to
-correlate an event with the challenge that authorised it, whereas the nonce is
-the secret that challenge protects.
+The matched `location_id` is recorded — enough to correlate an event with
+which of the tenant's locations authorised it.
 
 ### Audit
 
 `ATTENDANCE_CHECK_IN` / `ATTENDANCE_CHECK_OUT` on success, carrying the event id,
-challenge id, distance and accuracy. `ATTENDANCE_CHECK_IN_FAILED` /
+matched location id, distance and accuracy. `ATTENDANCE_CHECK_IN_FAILED` /
 `ATTENDANCE_CHECK_OUT_FAILED` on refusal, carrying the failure reason and the
 state at the time.
 
@@ -945,6 +940,46 @@ rather than leaving a presence row and an attendance row describing the same
 event. As in Phase 3 the audit keeps the *internal* reason — a cross-tenant
 attempt is recorded as `QR_TENANT_MISMATCH` even though the client is told
 `QR_NOT_FOUND`.
+
+### Forgotten-checkout auto-close (Phase 12)
+
+`attendance_events` still gets no derived status column — this is the one
+narrow, deliberate exception: a `CHECK_IN` left open longer than the
+tenant's own `attendance_locations.max_shift_hours` (a *per-location*
+setting, defaulting to 16 for a freshly created location - not a global env
+var, since a 9-to-5 office and 24h on-call staff need genuinely different
+numbers) is closed by inserting a new `CHECK_OUT` event, never by editing
+the open one.
+
+- `app.services.attendance.service.close_stale_session_if_needed` does the
+  actual closing, under the same user-row lock every other attendance write
+  already takes. It looks up the tenant's active location to read its
+  configured cutoff (falling back to `DEFAULT_MAX_SHIFT_HOURS` only in the
+  practically-unreachable case of a stale session outliving its location).
+  It's called from two places:
+  - **In-band**, at the top of every `record_attendance` call (the common
+    case: the same person's next check-in or check-out silently closes their
+    forgotten session before evaluating the action they actually asked for).
+  - **Out-of-band**, via `app/jobs/close_stale_sessions.py` — a standalone
+    script for the tail case (someone who never comes back at all, so
+    nothing else would ever touch their row). It scans for every currently
+    open `CHECK_IN` across the whole database (no time-based pre-filter,
+    since there is no single global cutoff to filter by any more) and lets
+    the precise, per-location check under lock decide - cheap enough at the
+    scale this runs at. Run it on whatever the deployment platform offers
+    for scheduled jobs; no in-process scheduler dependency was added (same
+    "no dependency added" posture as Phase 7).
+- The inserted event has `verification_status = 'AUTO_CLOSED'` and no GPS
+  evidence (`latitude`/`longitude`/`gps_accuracy_meters` all `NULL` — the
+  columns already allowed this). `AttendanceOutcome.auto_closed_previous_session`
+  and `AttendanceSession.check_out_auto_closed` surface it to API responses so
+  a client can render it distinctly from a real checkout.
+- Both the in-band and out-of-band paths take the identical user-row lock, so
+  they can never double-insert a closing event for the same stale session —
+  proven the same way every other concurrency invariant here is: a forced
+  interleaving in `tests/test_attendance_concurrency.py`, with a deliberately
+  unlocked implementation asserted to double-insert under the identical
+  interleaving.
 
 ### Not in Phase 4
 
@@ -1107,8 +1142,8 @@ Attendance is sensitive operational data, so responses carry the minimum:
 timestamps, event ids, derived status, and — for the team view — name and
 employee code.
 
-Never returned: `verification_metadata`, GPS coordinates, distance, accuracy, QR
-challenge ids, nonces, email addresses, roles, password hashes or tokens. The
+Never returned: `verification_metadata`, GPS coordinates, distance, accuracy,
+matched location ids, email addresses, roles, password hashes or tokens. The
 verification evidence is retained on the event row for audit; a history screen has
 no use for it, and every field exposed is a field that can leak. Tests assert the
 absence of each by scanning the raw response text.
@@ -1501,16 +1536,14 @@ who has been trying to log in.
 | `POST /auth/login` (failures only) | `(tenant, email)` digest | 10 / 15 min |
 | `POST /auth/refresh`, `POST /auth/logout` | client address | 60 / min |
 | `POST /users/me/password` | user | 5 / 15 min |
-| `POST /presence/qr/challenge` | user | 60 / min |
 | `POST /presence/verify` | user | 30 / min |
 | `POST /attendance/check-in`, `/check-out` | user | 20 / min |
-| Tenant-admin mutations, `PATCH /tenant/me` | user | 120 / min |
+| Tenant-admin mutations, `PATCH /tenant/me`, QR regeneration | user | 120 / min |
 
 Budgets are set so a real person never meets one: someone checks in twice a day
-against 20/min, and the office QR display refreshes about twice a minute against
-60/min. A test walks a full working day — login, presence check, check in, out for
-lunch, back in, out for the day, each with its own fresh QR, plus ten dashboard
-reads — and asserts nothing is throttled.
+against 20/min. A test walks a full working day — login, presence check, check
+in, out for lunch, back in, out for the day (the same static QR every time),
+plus ten dashboard reads — and asserts nothing is throttled.
 
 Read endpoints are **not** limited. They are already bounded by pagination and range
 caps, and throttling a dashboard a manager refreshes would be user-visible for no
@@ -1550,8 +1583,10 @@ inside a request carries `request_id`; the access line adds `method`, `path`, `r
   distinct value on every line.
 - **The query string is never logged.** `?search=<someone's name>` is user input, and
   a log line may be retained for months.
-- **Never logged at all:** passwords, password hashes, access tokens, refresh tokens,
-  QR nonces, `Authorization` headers, request bodies. A failed login records the
+- **Never logged at all:** passwords, password hashes, access tokens, refresh
+  tokens, `Authorization` headers, request bodies. (The QR token itself is not
+  a secret since Phase 12 — it's printed on a poster — but it still isn't
+  logged, since nothing needs it to be.) A failed login records the
   *tenant slug* — public, and what an operator correlates by — and not the email,
   because a log of attempted addresses is a list of accounts worth attacking.
 - **Key-based redaction as a net**, not as the plan: any field whose name suggests a
@@ -1646,31 +1681,37 @@ What a client can rely on: every error is `{"detail": ...}`; validation failures
 can read it and report it; business refusals stay **200** with `success: false` /
 `verified: false` plus a machine-readable `reason`; no identity field is ever accepted
 from the client; and `/openapi.json` documents authentication, roles, statuses and
-pagination across all 24 paths.
+pagination across every path it lists (grep it, rather than trusting a count
+here — it has drifted from the actual path list at least once already).
 
 ## 9. Current database entities
 
-Seven tables — the six Phase 1 entities plus one for Phase 2:
+The Phase 1 entities, minus the one Phase 12 dropped, plus one each from
+Phases 2 and 11:
 
-| Table                  | Purpose                                             |
-| ---------------------- | --------------------------------------------------- |
-| `tenants`              | One customer company                                |
-| `users`                | A person within a tenant                            |
-| `attendance_locations` | The tenant's single attendance site (V1)             |
-| `qr_challenges`        | Short-lived, one-time-use QR nonces                 |
-| `attendance_events`    | **Source of truth** for attendance                  |
-| `audit_logs`           | Append-only trail of privileged actions             |
-| `refresh_tokens`       | Hashed refresh tokens (authentication state)         |
+| Table                        | Purpose                                             |
+| ----------------------------- | --------------------------------------------------- |
+| `tenants`                    | One customer company                                |
+| `users`                      | A person within a tenant                            |
+| `attendance_locations`       | The tenant's single attendance site (V1); carries the static `qr_token` (Phase 12) |
+| `attendance_events`          | **Source of truth** for attendance                  |
+| `audit_logs`                 | Append-only trail of privileged actions             |
+| `refresh_tokens`             | Hashed refresh tokens (authentication state)         |
+| `email_verification_tokens`  | Hashed onboarding-verification tokens (Phase 11)     |
+
+`qr_challenges` (one-time-use QR nonces) and `display_tokens` (office-display
+kiosk credentials) existed through Phase 11 and were dropped in Phase 12 —
+see §8b.
 
 ### Relationships
 
 ```
 Tenant ─┬─< User ─┬─< AttendanceEvent
         │         ├─< AuditLog          (as actor)
-        │         └─< RefreshToken
-        ├─< AttendanceLocation ─< QRChallenge
+        │         ├─< RefreshToken
+        │         └─< EmailVerificationToken
+        ├─< AttendanceLocation
         ├─< AttendanceEvent
-        ├─< QRChallenge
         ├─< AuditLog
         └─< RefreshToken
 ```
@@ -1686,12 +1727,12 @@ foreign keys, chosen per relationship:
 | `attendance_locations.tenant_id`     | `RESTRICT`  | site config is business data                |
 | `attendance_events.tenant_id`        | `RESTRICT`  | source of truth — must not vanish           |
 | `attendance_events.user_id`          | `RESTRICT`  | as above                                   |
-| `qr_challenges.tenant_id`            | `CASCADE`   | disposable, short-lived artefact            |
-| `qr_challenges.location_id`          | `CASCADE`   | as above                                   |
 | `audit_logs.tenant_id`               | `SET NULL`  | the trail must outlive its subject          |
 | `audit_logs.actor_user_id`           | `SET NULL`  | as above                                   |
 | `refresh_tokens.user_id`             | `CASCADE`   | a session is not history; drop it with the user |
 | `refresh_tokens.tenant_id`           | `CASCADE`   | as above                                   |
+| `email_verification_tokens.user_id`  | `CASCADE`   | authentication-adjacent ephemeral state, like refresh tokens |
+| `email_verification_tokens.tenant_id`| `CASCADE`   | as above                                   |
 
 ### Conventions
 
@@ -1738,11 +1779,15 @@ manifests · a `refresh_tokens` cleanup sweeper · supply-chain hash pinning. Ea
 stated with its consequences in
 [`docs/PRODUCTION.md`](docs/PRODUCTION.md) — §12 lists every known residual risk.
 
-**Deliberately not implemented in Phase 3:** Wi-Fi verification (specified as
-optional) · device fingerprinting / attestation · face recognition · the office
-display frontend · rate limiting (endpoints are structured so it can be added;
-Redis arrives with it) · a public QR-revocation endpoint (revocation exists at
-service level only, so there is no route to abuse).
+**Deliberately not implemented (originally Phase 3, still true after Phase
+12's redesign):** Wi-Fi verification (specified as optional) · device
+fingerprinting / attestation · face recognition · rate limiting (endpoints
+are structured so it can be added; Redis arrives with it). The office
+display frontend Phase 11 *did* build was removed outright in Phase 12 once
+the QR it served became static — there is no plan to rebuild it. QR
+revocation now has a real admin-facing route (`POST
+/tenant/me/location/qr-token/regenerate`, TENANT_ADMIN-only); there is still
+no *public* revocation endpoint, nor any need for one.
 
 **Deferred to later phases:** registration · password reset · user-management
 and tenant-management APIs · super-admin endpoints · role-management API ·
@@ -1841,7 +1886,7 @@ backend/
 │   │   └── v1/
 │   │       ├── router.py        # aggregates v1 routers; owns API_V1_PREFIX
 │   │       ├── auth.py          # login / refresh / logout / me
-│   │       ├── presence.py      # qr/challenge / verify
+│   │       ├── presence.py      # verify (static QR + GPS)
 │   │       ├── attendance.py    # check-in / check-out / reads
 │   │       ├── users.py         # user management + self-service
 │   │       └── tenant.py        # tenant profile
@@ -1860,7 +1905,7 @@ backend/
 │       ├── presence/
 │       │   ├── results.py       # shared enums + result dataclasses
 │       │   ├── gps.py           # validation, haversine, geofence
-│       │   ├── qr.py            # challenge lifecycle, atomic consume
+│       │   ├── qr.py            # static QR-token resolution (read-only)
 │       │   └── service.py       # combines both signals, audit logging
 │       ├── attendance/
 │       │   ├── results.py       # state machine enums, outcome, read models

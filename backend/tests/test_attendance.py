@@ -1,4 +1,4 @@
-"""Attendance check-in / check-out (spec checks 1-36).
+"""Attendance check-in / check-out.
 
 Everything goes through the HTTP endpoints, because the security properties
 being asserted (server-derived identity, refused smuggled fields) only exist at
@@ -23,8 +23,6 @@ from app.models import (
     AttendanceEventType,
     AttendanceLocation,
     AuditLog,
-    QRChallenge,
-    QRChallengeStatus,
     Tenant,
     User,
     UserRole,
@@ -35,7 +33,6 @@ from app.services.attendance.service import (
     ACTION_CHECK_IN_FAILED,
     ACTION_CHECK_OUT,
 )
-from app.services.presence import qr as qr_service
 from tests.conftest import (
     OFFICE_LATITUDE,
     OFFICE_LONGITUDE,
@@ -45,7 +42,6 @@ from tests.conftest import (
 
 CHECK_IN_URL = "/api/v1/attendance/check-in"
 CHECK_OUT_URL = "/api/v1/attendance/check-out"
-CHALLENGE_URL = "/api/v1/presence/qr/challenge"
 
 INSIDE = offset_north(OFFICE_LATITUDE, 73.0)
 OUTSIDE = offset_north(OFFICE_LATITUDE, 350.0)
@@ -62,7 +58,6 @@ class Office:
 
 @pytest.fixture
 def office(
-    client: TestClient,
     login: Callable[..., Response],
     tenant_factory: Callable[..., Tenant],
     user_factory: Callable[..., User],
@@ -98,33 +93,25 @@ def office(
     return _make
 
 
-def new_challenge(client: TestClient, office: Office) -> dict:
-    """Issue a fresh QR challenge through the real endpoint."""
-    response = client.post(CHALLENGE_URL, headers=auth_header(office.manager_token))
-    assert response.status_code == 201
-    return response.json()
-
-
-def evidence(challenge: dict, *, lat: float = INSIDE, accuracy: float = 12.5) -> dict:
+def evidence(office: Office, *, lat: float = INSIDE, accuracy: float = 12.5) -> dict:
     return {
         "latitude": lat,
         "longitude": OFFICE_LONGITUDE,
         "accuracy_meters": accuracy,
-        "challenge_id": challenge["challenge_id"],
-        "nonce": challenge["nonce"],
+        "qr_token": str(office.location.qr_token),
     }
 
 
-def act(client: TestClient, url: str, office: Office, challenge: dict, **kw) -> Response:
-    return client.post(url, json=evidence(challenge, **kw), headers=auth_header(office.token))
+def act(client: TestClient, url: str, office: Office, **kw) -> Response:
+    return client.post(url, json=evidence(office, **kw), headers=auth_header(office.token))
 
 
 def check_in(client: TestClient, office: Office, **kw) -> Response:
-    return act(client, CHECK_IN_URL, office, new_challenge(client, office), **kw)
+    return act(client, CHECK_IN_URL, office, **kw)
 
 
 def check_out(client: TestClient, office: Office, **kw) -> Response:
-    return act(client, CHECK_OUT_URL, office, new_challenge(client, office), **kw)
+    return act(client, CHECK_OUT_URL, office, **kw)
 
 
 def event_count(session: Session) -> int:
@@ -132,7 +119,7 @@ def event_count(session: Session) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 1-8. Successful check-in
+# Successful check-in
 # ---------------------------------------------------------------------------
 
 
@@ -154,6 +141,7 @@ def test_staff_can_check_in(
     assert body["presence"]["verified"] is True
     assert body["presence"]["gps"]["distance_meters"] == pytest.approx(73.0, abs=1.0)
     assert body["reason"] is None
+    assert body["auto_closed_previous_session"] is False
 
 
 def test_check_in_creates_exactly_one_event_with_correct_content(
@@ -199,14 +187,12 @@ def test_event_timestamp_is_server_generated(
     assert abs((returned - event.event_timestamp).total_seconds()) < 0.001
 
 
-def test_verification_metadata_is_stored_without_the_nonce(
+def test_verification_metadata_is_stored(
     client: TestClient, db_session: Session, office: Callable[..., Office]
 ) -> None:
     o = office()
-    challenge = new_challenge(client, o)
-    nonce = challenge["nonce"]
 
-    act(client, CHECK_IN_URL, o, challenge)
+    check_in(client, o)
 
     event = db_session.scalars(select(AttendanceEvent)).one()
     metadata = event.verification_metadata
@@ -216,33 +202,23 @@ def test_verification_metadata_is_stored_without_the_nonce(
     assert metadata["gps"]["distance_meters"] == pytest.approx(73.0, abs=1.0)
     assert metadata["gps"]["accuracy_meters"] == 12.5
     assert metadata["qr"]["verified"] is True
-    assert metadata["qr"]["challenge_id"] == challenge["challenge_id"]
+    assert metadata["qr"]["location_id"] == str(o.location.id)
     assert metadata["attendance_state"] == "CHECKED_IN"
-    # The challenge id is enough to audit the decision; the nonce is a secret.
-    assert nonce not in str(metadata)
-    assert "nonce" not in str(metadata).lower()
 
 
-def test_check_in_consumes_the_qr_challenge(
+def test_qr_is_reusable_across_check_in_and_check_out(
     client: TestClient, db_session: Session, office: Callable[..., Office]
 ) -> None:
+    """The static QR is not spent by use - unlike the old rotating challenge."""
     o = office()
-    challenge = new_challenge(client, o)
 
-    act(client, CHECK_IN_URL, o, challenge)
-
-    stored = db_session.scalar(
-        select(QRChallenge)
-        .where(QRChallenge.id == uuid.UUID(challenge["challenge_id"]))
-        .execution_options(populate_existing=True)
-    )
-    assert stored is not None
-    assert stored.status == QRChallengeStatus.USED
-    assert stored.used_at is not None
+    assert check_in(client, o).json()["success"] is True
+    assert check_out(client, o).json()["success"] is True
+    assert event_count(db_session) == 2
 
 
 # ---------------------------------------------------------------------------
-# 9-16. Check-in refusals
+# Check-in refusals
 # ---------------------------------------------------------------------------
 
 
@@ -272,74 +248,27 @@ def test_gps_failure_refuses_check_in_and_writes_no_event(
     assert event_count(db_session) == 0
 
 
-def test_wrong_nonce_refuses_check_in(
+def test_unknown_qr_refuses_check_in(
     client: TestClient, db_session: Session, office: Callable[..., Office]
 ) -> None:
     o = office()
-    challenge = new_challenge(client, o)
-    challenge["nonce"] = qr_service.generate_nonce()
 
-    body = act(client, CHECK_IN_URL, o, challenge).json()
-
-    assert body["success"] is False
-    assert body["reason"] == "QR_NONCE_MISMATCH"
-    assert event_count(db_session) == 0
-
-
-def test_unknown_challenge_refuses_check_in(
-    client: TestClient, db_session: Session, office: Callable[..., Office]
-) -> None:
-    o = office()
-    challenge = new_challenge(client, o)
-    challenge["challenge_id"] = str(uuid.uuid4())
-
-    body = act(client, CHECK_IN_URL, o, challenge).json()
+    body = client.post(
+        CHECK_IN_URL,
+        json={**evidence(o), "qr_token": str(uuid.uuid4())},
+        headers=auth_header(o.token),
+    ).json()
 
     assert body["reason"] == "QR_NOT_FOUND"
     assert event_count(db_session) == 0
-
-
-def test_expired_challenge_refuses_check_in(
-    client: TestClient, db_session: Session, office: Callable[..., Office]
-) -> None:
-    o = office()
-    challenge = new_challenge(client, o)
-    row = db_session.scalar(
-        select(QRChallenge).where(QRChallenge.id == uuid.UUID(challenge["challenge_id"]))
-    )
-    assert row is not None
-    row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-    db_session.flush()
-
-    body = act(client, CHECK_IN_URL, o, challenge).json()
-
-    assert body["reason"] == "QR_EXPIRED"
-    assert event_count(db_session) == 0
-
-
-def test_already_used_challenge_refuses_check_in(
-    client: TestClient, db_session: Session, office: Callable[..., Office]
-) -> None:
-    """A challenge spent on a check-in cannot authorise a second one."""
-    o = office()
-    challenge = new_challenge(client, o)
-    assert act(client, CHECK_IN_URL, o, challenge).json()["success"] is True
-    act(client, CHECK_OUT_URL, o, new_challenge(client, o))  # back to NOT_CHECKED_IN
-
-    body = act(client, CHECK_IN_URL, o, challenge).json()
-
-    assert body["success"] is False
-    assert body["reason"] == "QR_ALREADY_USED"
-    assert event_count(db_session) == 2  # the original pair, nothing more
 
 
 def test_unauthenticated_cannot_check_in(
     client: TestClient, db_session: Session, office: Callable[..., Office]
 ) -> None:
     o = office()
-    challenge = new_challenge(client, o)
 
-    response = client.post(CHECK_IN_URL, json=evidence(challenge))
+    response = client.post(CHECK_IN_URL, json=evidence(o))
 
     assert response.status_code == 401
     assert event_count(db_session) == 0
@@ -352,12 +281,11 @@ def test_inactive_user_cannot_check_in(
 ) -> None:
     """Deactivation takes effect on the next request, via the auth dependency."""
     o = office()
-    challenge = new_challenge(client, o)
     o.staff.status = UserStatus.INACTIVE.value
     db_session.flush()
 
     response = client.post(
-        CHECK_IN_URL, json=evidence(challenge), headers=auth_header(o.token)
+        CHECK_IN_URL, json=evidence(o), headers=auth_header(o.token)
     )
 
     assert response.status_code == 401
@@ -365,7 +293,7 @@ def test_inactive_user_cannot_check_in(
 
 
 # ---------------------------------------------------------------------------
-# 17-21. State transitions
+# State transitions
 # ---------------------------------------------------------------------------
 
 
@@ -381,32 +309,6 @@ def test_duplicate_check_in_is_refused(
     assert body["reason"] == "ALREADY_CHECKED_IN"
     assert body["status"] == "CHECKED_IN"
     assert event_count(db_session) == 1
-
-
-def test_duplicate_check_in_does_not_burn_the_challenge(
-    client: TestClient, db_session: Session, office: Callable[..., Office]
-) -> None:
-    """State is checked before evidence, so a rejected duplicate wastes nothing.
-
-    Otherwise a user tapping twice would destroy the office's current code for
-    everyone else queuing behind them.
-    """
-    o = office()
-    check_in(client, o)
-    challenge = new_challenge(client, o)
-
-    assert act(client, CHECK_IN_URL, o, challenge).json()["reason"] == "ALREADY_CHECKED_IN"
-
-    stored = db_session.scalar(
-        select(QRChallenge)
-        .where(QRChallenge.id == uuid.UUID(challenge["challenge_id"]))
-        .execution_options(populate_existing=True)
-    )
-    assert stored is not None
-    assert stored.status == QRChallengeStatus.ACTIVE
-    assert stored.used_at is None
-    # And it still works for the legitimate next action.
-    assert act(client, CHECK_OUT_URL, o, challenge).json()["success"] is True
 
 
 def test_check_out_without_check_in_is_refused(
@@ -476,7 +378,7 @@ def test_full_cycle_and_repeat(
 
 
 # ---------------------------------------------------------------------------
-# 22-25. Check-out specifics
+# Check-out specifics
 # ---------------------------------------------------------------------------
 
 
@@ -504,7 +406,7 @@ def test_check_out_records_a_correct_event(
 
 
 # ---------------------------------------------------------------------------
-# 26-32. Security
+# Security
 # ---------------------------------------------------------------------------
 
 
@@ -533,10 +435,9 @@ def test_smuggled_fields_are_refused(
     url: str,
 ) -> None:
     o = office()
-    challenge = new_challenge(client, o)
 
     response = client.post(
-        url, json={**evidence(challenge), **smuggled}, headers=auth_header(o.token)
+        url, json={**evidence(o), **smuggled}, headers=auth_header(o.token)
     )
 
     assert response.status_code == 422, smuggled
@@ -548,16 +449,15 @@ def test_distance_spoof_cannot_rescue_a_failing_check_in(
 ) -> None:
     """Claiming distance 0 from 350 m away is refused, and honestly re-checked."""
     o = office()
-    challenge = new_challenge(client, o)
 
     spoofed = client.post(
         CHECK_IN_URL,
-        json={**evidence(challenge, lat=OUTSIDE), "distance_meters": 0.0},
+        json={**evidence(o, lat=OUTSIDE), "distance_meters": 0.0},
         headers=auth_header(o.token),
     )
     assert spoofed.status_code == 422
 
-    honest = act(client, CHECK_IN_URL, o, challenge, lat=OUTSIDE).json()
+    honest = act(client, CHECK_IN_URL, o, lat=OUTSIDE).json()
     assert honest["success"] is False
     assert honest["presence"]["gps"]["distance_meters"] == pytest.approx(350.0, abs=2.0)
     assert event_count(db_session) == 0
@@ -572,11 +472,10 @@ def test_event_is_always_recorded_for_the_authenticated_user(
     victim = db_session.scalars(
         select(User).where(User.tenant_id == o.tenant.id, User.employee_code == "MGR-1")
     ).one()
-    challenge = new_challenge(client, o)
 
     response = client.post(
         f"{CHECK_IN_URL}?user_id={victim.id}&tenant_id={uuid.uuid4()}",
-        json=evidence(challenge),
+        json=evidence(o),
         headers={**auth_header(o.token), "X-User-Id": str(victim.id)},
     )
 
@@ -587,20 +486,23 @@ def test_event_is_always_recorded_for_the_authenticated_user(
     assert other.id == o.staff.id
 
 
-def test_cross_tenant_challenge_cannot_create_an_event(
+def test_cross_tenant_qr_cannot_create_an_event(
     client: TestClient, db_session: Session, office: Callable[..., Office]
 ) -> None:
     acme = office(slug="acme")
     beta = office(slug="beta")
-    beta_challenge = new_challenge(client, beta)
 
-    body = act(client, CHECK_IN_URL, acme, beta_challenge).json()
+    body = client.post(
+        CHECK_IN_URL,
+        json={**evidence(acme), "qr_token": str(beta.location.qr_token)},
+        headers=auth_header(acme.token),
+    ).json()
 
     assert body["success"] is False
     assert body["reason"] == "QR_NOT_FOUND"
     assert event_count(db_session) == 0
-    # Beta's challenge is untouched and still usable by Beta's own staff.
-    assert act(client, CHECK_IN_URL, beta, beta_challenge).json()["success"] is True
+    # Beta's own staff can still use Beta's own QR.
+    assert check_in(client, beta).json()["success"] is True
     event = db_session.scalars(select(AttendanceEvent)).one()
     assert event.tenant_id == beta.tenant.id
 
@@ -622,27 +524,6 @@ def test_attendance_state_is_per_user_and_per_tenant(
     events = db_session.scalars(select(AttendanceEvent)).all()
     assert {e.user_id for e in events} == {acme.staff.id, beta.staff.id}
     assert {e.tenant_id for e in events} == {acme.tenant.id, beta.tenant.id}
-
-
-# ---------------------------------------------------------------------------
-# 33-36. QR single-use across the lifecycle
-# ---------------------------------------------------------------------------
-
-
-def test_check_in_qr_cannot_be_reused_for_check_out(
-    client: TestClient, db_session: Session, office: Callable[..., Office]
-) -> None:
-    """The single-use guarantee spans the two endpoints, not just one."""
-    o = office()
-    challenge = new_challenge(client, o)
-    assert act(client, CHECK_IN_URL, o, challenge).json()["success"] is True
-
-    body = act(client, CHECK_OUT_URL, o, challenge).json()
-
-    assert body["success"] is False
-    assert body["reason"] == "QR_ALREADY_USED"
-    assert body["status"] == "CHECKED_IN"  # still checked in
-    assert event_count(db_session) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +585,11 @@ def test_cross_tenant_probe_keeps_its_precise_reason_in_the_audit(
     acme = office(slug="acme")
     beta = office(slug="beta")
 
-    body = act(client, CHECK_IN_URL, acme, new_challenge(client, beta)).json()
+    body = client.post(
+        CHECK_IN_URL,
+        json={**evidence(acme), "qr_token": str(beta.location.qr_token)},
+        headers=auth_header(acme.token),
+    ).json()
 
     assert body["reason"] == "QR_NOT_FOUND"  # client sees the collapsed reason
     entry = db_session.scalars(
@@ -715,21 +600,6 @@ def test_cross_tenant_probe_keeps_its_precise_reason_in_the_audit(
     assert entry.tenant_id == acme.tenant.id
 
 
-def test_no_audit_metadata_contains_a_nonce(
-    client: TestClient, db_session: Session, office: Callable[..., Office]
-) -> None:
-    o = office()
-    challenge = new_challenge(client, o)
-    nonce = challenge["nonce"]
-    act(client, CHECK_IN_URL, o, challenge)
-    check_in(client, o)  # duplicate -> failure audit
-
-    for entry in db_session.scalars(select(AuditLog)):
-        rendered = str(entry.log_metadata)
-        assert nonce not in rendered
-        assert "$argon2" not in rendered
-
-
 # ---------------------------------------------------------------------------
 # Presence endpoint still works alongside attendance
 # ---------------------------------------------------------------------------
@@ -738,13 +608,12 @@ def test_no_audit_metadata_contains_a_nonce(
 def test_presence_endpoint_still_works_and_creates_no_attendance(
     client: TestClient, db_session: Session, office: Callable[..., Office]
 ) -> None:
-    """Phase 3's endpoint is unchanged: it verifies, but records no attendance."""
+    """The presence endpoint verifies, but records no attendance."""
     o = office()
-    challenge = new_challenge(client, o)
 
     body = client.post(
         "/api/v1/presence/verify",
-        json=evidence(challenge),
+        json=evidence(o),
         headers=auth_header(o.token),
     ).json()
 
@@ -752,28 +621,60 @@ def test_presence_endpoint_still_works_and_creates_no_attendance(
     assert event_count(db_session) == 0
 
 
-def test_a_prior_presence_verification_does_not_authorise_check_in(
-    client: TestClient, db_session: Session, office: Callable[..., Office]
-) -> None:
-    """The server re-verifies; it never trusts a previous PRESENCE_VERIFIED.
+# ---------------------------------------------------------------------------
+# Forgotten-checkout auto-close respects the tenant's own cutoff
+# ---------------------------------------------------------------------------
 
-    The challenge consumed by /presence/verify is spent, so re-presenting it to
-    check-in fails - there is no way to convert an earlier "I was verified" into
-    an attendance event.
+
+def test_auto_close_uses_the_tenants_own_max_shift_hours(
+    client: TestClient,
+    db_session: Session,
+    login: Callable[..., Response],
+    tenant_factory: Callable[..., Tenant],
+    user_factory: Callable[..., User],
+    location_factory: Callable[..., AttendanceLocation],
+    attendance_event_factory,
+) -> None:
+    """Same 20-hour-old open CHECK_IN, two tenants with different cutoffs:
+    one auto-closes it, the other - having raised its own limit - does not.
     """
-    o = office()
-    challenge = new_challenge(client, o)
-    assert (
-        client.post(
-            "/api/v1/presence/verify",
-            json=evidence(challenge),
-            headers=auth_header(o.token),
-        ).json()["verified"]
-        is True
+    stale_at = datetime.now(UTC) - timedelta(hours=20)
+
+    # Tenant with the default 16h cutoff: 20h is stale.
+    default_tenant = tenant_factory(slug="default-shift-co")
+    default_location = location_factory(default_tenant)  # DEFAULT_MAX_SHIFT_HOURS
+    default_staff = user_factory(
+        default_tenant, email="rahul@default-shift-co.com", role=UserRole.STAFF
+    )
+    default_token = login("default-shift-co", "rahul@default-shift-co.com").json()["access_token"]
+    attendance_event_factory(default_staff, event_type=AttendanceEventType.CHECK_IN, at=stale_at)
+
+    # Tenant that raised its own cutoff to 30h: the same 20h-old session is
+    # still a perfectly normal, ongoing shift.
+    long_shift_tenant = tenant_factory(slug="long-shift-co")
+    long_shift_location = location_factory(long_shift_tenant, max_shift_hours=30)
+    long_shift_staff = user_factory(
+        long_shift_tenant, email="priya@long-shift-co.com", role=UserRole.STAFF
+    )
+    long_shift_token = login("long-shift-co", "priya@long-shift-co.com").json()["access_token"]
+    attendance_event_factory(
+        long_shift_staff, event_type=AttendanceEventType.CHECK_IN, at=stale_at
     )
 
-    body = act(client, CHECK_IN_URL, o, challenge).json()
+    default_office = Office(default_tenant, default_location, default_staff, default_token, "")
+    long_shift_office = Office(
+        long_shift_tenant, long_shift_location, long_shift_staff, long_shift_token, ""
+    )
 
-    assert body["success"] is False
-    assert body["reason"] == "QR_ALREADY_USED"
-    assert event_count(db_session) == 0
+    # Default-cutoff tenant: the stale session was already auto-closed, so a
+    # check-out attempt now finds nothing open.
+    default_result = act(client, CHECK_OUT_URL, default_office).json()
+    assert default_result["success"] is False
+    assert default_result["reason"] == "NOT_CHECKED_IN"
+    assert default_result["auto_closed_previous_session"] is True
+
+    # Raised-cutoff tenant: still genuinely checked in, so the same check-out
+    # attempt succeeds normally with no auto-close.
+    long_shift_result = act(client, CHECK_OUT_URL, long_shift_office).json()
+    assert long_shift_result["success"] is True
+    assert long_shift_result["auto_closed_previous_session"] is False

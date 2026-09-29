@@ -1,4 +1,4 @@
-"""Schema-level tests for the six Karya entities.
+"""Schema-level tests for the core Karya entities.
 
 These cover persistence, relationships, tenant-isolation constraints and the
 PostgreSQL-specific behaviour the schema depends on (UUID defaults, TIMESTAMPTZ,
@@ -8,7 +8,6 @@ JSONB). No business logic exists yet, so nothing beyond the schema is asserted.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import inspect, select, text
@@ -20,8 +19,6 @@ from app.models import (
     AttendanceEventType,
     AttendanceLocation,
     AuditLog,
-    QRChallenge,
-    QRChallengeStatus,
     Tenant,
     User,
     UserRole,
@@ -237,56 +234,39 @@ def test_different_tenants_may_each_have_one_location(db_session: Session) -> No
 
 
 # ---------------------------------------------------------------------------
-# 8-9. QR challenges
+# 8-9. Static QR token
 # ---------------------------------------------------------------------------
 
 
-def test_qr_challenge_references_tenant_and_location(db_session: Session) -> None:
+def test_location_gets_a_qr_token_by_default(db_session: Session) -> None:
     tenant = make_tenant(db_session)
     location = make_location(db_session, tenant)
 
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
-    challenge = QRChallenge(
-        tenant_id=tenant.id,
-        location_id=location.id,
-        nonce="nonce-abc-123",
-        expires_at=expires_at,
-    )
-    db_session.add(challenge)
-    db_session.commit()
-
-    assert challenge.tenant.id == tenant.id
-    assert challenge.location.id == location.id
-    assert challenge.status == QRChallengeStatus.ACTIVE
-    assert challenge.used_at is None
-
-    db_session.refresh(location)
-    assert [c.id for c in location.qr_challenges] == [challenge.id]
+    assert isinstance(location.qr_token, uuid.UUID)
 
 
-def test_qr_nonce_is_unique(db_session: Session) -> None:
+def test_two_locations_get_different_qr_tokens(db_session: Session) -> None:
+    tenant_a = make_tenant(db_session, slug="acme")
+    tenant_b = make_tenant(db_session, slug="beta")
+
+    location_a = make_location(db_session, tenant_a)
+    location_b = make_location(db_session, tenant_b)
+
+    assert location_a.qr_token != location_b.qr_token
+
+
+def test_qr_token_is_unique(db_session: Session) -> None:
     tenant = make_tenant(db_session)
     location = make_location(db_session, tenant)
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
-
-    db_session.add(
-        QRChallenge(
-            tenant_id=tenant.id,
-            location_id=location.id,
-            nonce="collide",
-            expires_at=expires_at,
-        )
+    duplicate = AttendanceLocation(
+        tenant_id=make_tenant(db_session, slug="beta").id,
+        name="Other Office",
+        latitude=location.latitude,
+        longitude=location.longitude,
+        qr_token=location.qr_token,
     )
-    db_session.commit()
+    db_session.add(duplicate)
 
-    db_session.add(
-        QRChallenge(
-            tenant_id=tenant.id,
-            location_id=location.id,
-            nonce="collide",
-            expires_at=expires_at,
-        )
-    )
     with pytest.raises(IntegrityError):
         db_session.flush()
 
@@ -436,7 +416,6 @@ def test_primary_key_columns_are_uuid_not_integer(db_session: Session) -> None:
         "tenants",
         "users",
         "attendance_locations",
-        "qr_challenges",
         "attendance_events",
         "audit_logs",
     ]
@@ -455,12 +434,6 @@ def test_timestamps_are_timezone_aware(db_session: Session) -> None:
     tenant = make_tenant(db_session)
     user = make_user(db_session, tenant)
     location = make_location(db_session, tenant)
-    challenge = QRChallenge(
-        tenant_id=tenant.id,
-        location_id=location.id,
-        nonce="tz-check",
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
-    )
     event = AttendanceEvent(
         tenant_id=tenant.id,
         user_id=user.id,
@@ -468,10 +441,10 @@ def test_timestamps_are_timezone_aware(db_session: Session) -> None:
         verification_status=VerificationStatus.VERIFIED,
     )
     entry = AuditLog(tenant_id=tenant.id, actor_user_id=user.id, action="USER_CREATED")
-    db_session.add_all([challenge, event, entry])
+    db_session.add_all([event, entry])
     db_session.commit()
 
-    for obj in (tenant, user, location, challenge, event, entry):
+    for obj in (tenant, user, location, event, entry):
         db_session.refresh(obj)
 
     aware = [
@@ -481,8 +454,6 @@ def test_timestamps_are_timezone_aware(db_session: Session) -> None:
         user.updated_at,
         location.created_at,
         location.updated_at,
-        challenge.created_at,
-        challenge.expires_at,
         event.created_at,
         event.event_timestamp,
         entry.created_at,
@@ -534,7 +505,7 @@ def test_verification_metadata_roundtrips_as_jsonb(db_session: Session) -> None:
 
     metadata = {
         "gps": {"verified": True, "distance_meters": 73, "accuracy_meters": 12},
-        "qr": {"verified": True, "challenge_id": str(uuid.uuid4())},
+        "qr": {"verified": True, "location_id": str(uuid.uuid4())},
         "signals": ["wifi", "device_integrity"],
         "risk_score": 0.12,
     }

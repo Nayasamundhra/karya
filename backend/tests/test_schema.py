@@ -10,12 +10,11 @@ import pytest
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.orm import Session
 
-#: The six Phase 1 business entities.
+#: The five Phase 1 business entities.
 PHASE_1_TABLES = {
     "tenants",
     "users",
     "attendance_locations",
-    "qr_challenges",
     "attendance_events",
     "audit_logs",
 }
@@ -23,9 +22,11 @@ PHASE_1_TABLES = {
 #: Phase 2 added exactly one table: authentication state.
 PHASE_2_TABLES = {"refresh_tokens"}
 
-#: Phase 11 added self-service onboarding (email verification) and the
-#: office-display kiosk mechanism (display tokens).
-PHASE_11_TABLES = {"email_verification_tokens", "display_tokens"}
+#: Phase 11 added self-service onboarding (email verification). The
+#: office-display kiosk table it also added (`display_tokens`) was later
+#: retired along with the rotating QR challenge it existed to serve - see the
+#: `static_qr_token_and_retire_kiosk_tables` migration.
+PHASE_11_TABLES = {"email_verification_tokens"}
 
 EXPECTED_TABLES = PHASE_1_TABLES | PHASE_2_TABLES | PHASE_11_TABLES
 
@@ -33,20 +34,16 @@ EXPECTED_TABLES = PHASE_1_TABLES | PHASE_2_TABLES | PHASE_11_TABLES
 TENANT_SCOPED_TABLES = {
     "users",
     "attendance_locations",
-    "qr_challenges",
     "attendance_events",
     "audit_logs",
     "refresh_tokens",
     "email_verification_tokens",
-    "display_tokens",
 }
 
 #: (table, column) -> (referenced table, ON DELETE action)
 EXPECTED_FOREIGN_KEYS = {
     ("users", "tenant_id"): ("tenants", "RESTRICT"),
     ("attendance_locations", "tenant_id"): ("tenants", "RESTRICT"),
-    ("qr_challenges", "tenant_id"): ("tenants", "CASCADE"),
-    ("qr_challenges", "location_id"): ("attendance_locations", "CASCADE"),
     ("attendance_events", "tenant_id"): ("tenants", "RESTRICT"),
     ("attendance_events", "user_id"): ("users", "RESTRICT"),
     ("audit_logs", "tenant_id"): ("tenants", "SET NULL"),
@@ -59,14 +56,6 @@ EXPECTED_FOREIGN_KEYS = {
     # state, like refresh tokens - they cascade with their user/tenant.
     ("email_verification_tokens", "user_id"): ("users", "CASCADE"),
     ("email_verification_tokens", "tenant_id"): ("tenants", "CASCADE"),
-    # Display tokens are kiosk *configuration*, not a session - RESTRICT
-    # matches attendance_locations (a tenant with a live display cannot be
-    # deleted by accident). The creating admin alone is SET NULL, matching
-    # audit_logs.actor_user_id: the record of which kiosk exists must
-    # outlive whichever admin happened to set it up.
-    ("display_tokens", "tenant_id"): ("tenants", "RESTRICT"),
-    ("display_tokens", "location_id"): ("attendance_locations", "RESTRICT"),
-    ("display_tokens", "created_by_user_id"): ("users", "SET NULL"),
 }
 
 
@@ -147,10 +136,10 @@ def test_unique_constraints(db_session: Session) -> None:
         ("users", "tenant_id,employee_code"),
         ("users", "tenant_id,email"),
         ("attendance_locations", "tenant_id"),
-        ("qr_challenges", "nonce"),
+        # The static QR code's value - see `app.models.attendance_location`.
+        ("attendance_locations", "qr_token"),
         ("refresh_tokens", "token_hash"),
         ("email_verification_tokens", "token_hash"),
-        ("display_tokens", "token_hash"),
     }
 
 
@@ -176,12 +165,6 @@ def test_required_indexes_exist(engine: Engine) -> None:
     assert ("event_timestamp",) in events
     assert ("tenant_id", "user_id", "event_timestamp") in events
 
-    challenges = indexed_column_sets("qr_challenges")
-    assert ("tenant_id",) in challenges
-    assert ("expires_at",) in challenges
-    # `nonce` is served by the UNIQUE constraint's index, not a second index.
-    assert ("nonce",) in challenges
-
     logs = indexed_column_sets("audit_logs")
     assert ("tenant_id",) in logs
     assert ("actor_user_id",) in logs
@@ -200,11 +183,6 @@ def test_required_indexes_exist(engine: Engine) -> None:
     assert ("user_id",) in verifications
     assert ("expires_at",) in verifications
     assert ("token_hash",) in verifications
-
-    displays = indexed_column_sets("display_tokens")
-    assert ("tenant_id",) in displays
-    assert ("location_id",) in displays
-    assert ("token_hash",) in displays
 
 
 def test_active_refresh_token_index_is_partial(db_session: Session) -> None:
@@ -238,16 +216,13 @@ def test_refresh_tokens_store_no_raw_token_column(engine: Engine) -> None:
     }
 
 
-def test_verification_and_display_tokens_store_no_raw_token_column(
-    engine: Engine,
-) -> None:
+def test_verification_tokens_store_no_raw_token_column(engine: Engine) -> None:
     """Same guarantee as `test_refresh_tokens_store_no_raw_token_column`,
-    extended to Phase 11's two new hashed-token tables."""
-    for table in ("email_verification_tokens", "display_tokens"):
-        columns = {c["name"] for c in inspect(engine).get_columns(table)}
-        assert "token_hash" in columns, table
-        assert "token" not in columns, table
-        assert "raw_token" not in columns, table
+    extended to Phase 11's hashed-token table."""
+    columns = {c["name"] for c in inspect(engine).get_columns("email_verification_tokens")}
+    assert "token_hash" in columns
+    assert "token" not in columns
+    assert "raw_token" not in columns
 
 
 def test_restrict_protects_attendance_data(db_session: Session) -> None:

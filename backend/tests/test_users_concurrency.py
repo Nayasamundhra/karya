@@ -24,7 +24,6 @@ from sqlalchemy.orm import Session
 from app.models import (
     AttendanceEvent,
     AuditLog,
-    QRChallenge,
     RefreshToken,
     Tenant,
     User,
@@ -49,7 +48,7 @@ class Fixture:
 
 def _purge(engine: Engine, tenant_id: uuid.UUID) -> None:
     with Session(engine) as session:
-        for model in (QRChallenge, AuditLog, RefreshToken, AttendanceEvent):
+        for model in (AuditLog, RefreshToken, AttendanceEvent):
             session.execute(delete(model).where(model.tenant_id == tenant_id))
         session.execute(delete(User).where(User.tenant_id == tenant_id))
         session.execute(delete(Tenant).where(Tenant.id == tenant_id))

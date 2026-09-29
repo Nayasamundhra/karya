@@ -323,44 +323,6 @@ def test_a_rejected_refresh_logs_no_token(
     assert presented not in captured_logs.getvalue()
 
 
-def test_a_qr_nonce_never_reaches_the_log(
-    db_session: Session,
-    client: TestClient,
-    captured_logs: io.StringIO,
-    tenant_factory: Callable[..., Tenant],
-    user_factory: Callable[..., User],
-    location_factory: Callable[..., object],
-    login: Callable[..., Response],
-) -> None:
-    """The nonce is the secret the challenge protects. The id is enough to correlate."""
-    from app.models.user import UserRole
-
-    tenant = tenant_factory(slug="acme")
-    location = location_factory(tenant)
-    user_factory(
-        tenant, email="priya@acme.com", employee_code="MGR-1", role=UserRole.MANAGER
-    )
-    db_session.flush()
-    token = login("acme", "priya@acme.com").json()["access_token"]
-
-    issued = client.post(
-        "/api/v1/presence/qr/challenge", headers=auth_header(token)
-    ).json()
-    client.post(
-        "/api/v1/presence/verify",
-        json={
-            "latitude": location.latitude,
-            "longitude": location.longitude,
-            "accuracy_meters": 10.0,
-            "challenge_id": issued["challenge_id"],
-            "nonce": issued["nonce"],
-        },
-        headers=auth_header(token),
-    )
-
-    assert issued["nonce"] not in captured_logs.getvalue()
-
-
 def test_the_startup_line_logs_no_credential(captured_logs: io.StringIO) -> None:
     """The startup line reports the database it will use, by its safe rendering."""
     with TestClient(app):

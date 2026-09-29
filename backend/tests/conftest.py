@@ -31,6 +31,7 @@ from app.db.session import get_db
 from app.main import app
 from app.models import (
     DEFAULT_GEOFENCE_RADIUS_METERS,
+    DEFAULT_MAX_SHIFT_HOURS,
     AttendanceEvent,
     AttendanceEventType,
     AttendanceLocation,
@@ -273,6 +274,7 @@ def location_factory(db_session: Session) -> Callable[..., AttendanceLocation]:
         latitude: float = OFFICE_LATITUDE,
         longitude: float = OFFICE_LONGITUDE,
         geofence_radius_meters: int = DEFAULT_GEOFENCE_RADIUS_METERS,
+        max_shift_hours: int = DEFAULT_MAX_SHIFT_HOURS,
         status: str = LOCATION_STATUS_ACTIVE,
     ) -> AttendanceLocation:
         location = AttendanceLocation(
@@ -281,6 +283,7 @@ def location_factory(db_session: Session) -> Callable[..., AttendanceLocation]:
             latitude=latitude,
             longitude=longitude,
             geofence_radius_meters=geofence_radius_meters,
+            max_shift_hours=max_shift_hours,
             status=status,
         )
         db_session.add(location)

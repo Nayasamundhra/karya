@@ -612,7 +612,7 @@ def test_deactivated_user_cannot_authenticate_or_act(
     assert client.post(
         "/api/v1/attendance/check-in",
         json={"latitude": 12.9716, "longitude": 77.5946, "accuracy_meters": 10.0,
-              "challenge_id": str(uuid.uuid4()), "nonce": "x" * 20},
+              "qr_token": str(uuid.uuid4())},
         headers=auth_header(o.staff_token),
     ).status_code == 401
 

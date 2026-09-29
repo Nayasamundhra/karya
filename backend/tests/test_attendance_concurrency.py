@@ -1,15 +1,16 @@
-"""Concurrent check-in / check-out (spec checks 37-40).
+"""Concurrent check-in / check-out, and concurrent auto-close of a stale session.
 
-Same approach as ``test_presence_concurrency``: separate committed connections
-and a **forced interleaving**, because releasing N threads together does not
-reliably open the race window - each request is a sub-millisecond round trip, so
-a knowingly broken implementation passes.
+Separate committed connections and a **forced interleaving**, because
+releasing N threads together does not reliably open the race window - each
+request is a sub-millisecond round trip, so a knowingly broken implementation
+passes.
 
 Transaction A performs the action and holds its transaction open; B then does
 the same on another connection and must block on A's ``SELECT ... FOR UPDATE``
-of the user row. ``test_a_naive_unlocked_check_in_would_double_insert`` keeps
-this honest by asserting an implementation without that lock *does* produce two
-CHECK_INs under the identical interleaving.
+of the user row. ``test_a_naive_unlocked_check_in_would_double_insert`` and
+``test_a_naive_unlocked_auto_close_would_double_insert`` keep this honest by
+asserting an implementation without that lock *does* produce two events under
+the identical interleaving.
 """
 
 from __future__ import annotations
@@ -30,13 +31,13 @@ from app.models import (
     AttendanceEventType,
     AttendanceLocation,
     AuditLog,
-    QRChallenge,
-    QRChallengeStatus,
     RefreshToken,
     Tenant,
     User,
     UserRole,
+    VerificationStatus,
 )
+from app.models.attendance_location import DEFAULT_MAX_SHIFT_HOURS
 from app.services.attendance import service as attendance_service
 from app.services.attendance.results import (
     STATE_AFTER_EVENT,
@@ -45,7 +46,6 @@ from app.services.attendance.results import (
     AttendanceState,
 )
 from app.services.auth.password import hash_password
-from app.services.presence import qr as qr_service
 from app.services.presence import service as presence_service
 from tests.conftest import (
     DEFAULT_PASSWORD,
@@ -64,24 +64,26 @@ class Fixture:
     tenant_id: uuid.UUID
     location_id: uuid.UUID
     user_id: uuid.UUID
-    challenges: list[tuple[uuid.UUID, str]]
+    qr_token: uuid.UUID
 
-    def evidence(self, index: int) -> dict:
-        challenge_id, nonce = self.challenges[index]
+    def evidence(self, index: int = 0) -> dict:
+        """``index`` is vestigial - kept so call sites reading like "the second
+        attempt" still make sense - but the static QR is the same value on
+        every call, unlike the old per-challenge one it replaced.
+        """
         return {
             "tenant_id": self.tenant_id,
             "user_id": self.user_id,
             "latitude": INSIDE,
             "longitude": OFFICE_LONGITUDE,
             "accuracy_meters": 10.0,
-            "challenge_id": challenge_id,
-            "nonce": nonce,
+            "qr_token": self.qr_token,
         }
 
 
 def _purge(engine: Engine, tenant_id: uuid.UUID) -> None:
     with Session(engine) as session:
-        for model in (QRChallenge, AuditLog, RefreshToken, AttendanceEvent):
+        for model in (AuditLog, RefreshToken, AttendanceEvent):
             session.execute(delete(model).where(model.tenant_id == tenant_id))
         session.execute(
             delete(AttendanceLocation).where(AttendanceLocation.tenant_id == tenant_id)
@@ -93,7 +95,7 @@ def _purge(engine: Engine, tenant_id: uuid.UUID) -> None:
 
 @pytest.fixture
 def committed(engine: Engine) -> Iterator[Fixture]:
-    """A committed tenant, site, user and four spare QR challenges."""
+    """A committed tenant, site and user."""
     with Session(engine) as session:
         stale = session.scalar(select(Tenant).where(Tenant.slug == PROBE_SLUG))
         stale_id = stale.id if stale is not None else None
@@ -120,26 +122,13 @@ def committed(engine: Engine) -> Iterator[Fixture]:
             role=UserRole.STAFF.value,
         )
         session.add_all([location, user])
-        session.flush()
-
-        challenges = []
-        for _ in range(4):
-            challenge = QRChallenge(
-                tenant_id=tenant.id,
-                location_id=location.id,
-                nonce=qr_service.generate_nonce(),
-                expires_at=datetime.now(UTC) + timedelta(minutes=10),
-                status=QRChallengeStatus.ACTIVE.value,
-            )
-            session.add(challenge)
-            challenges.append(challenge)
         session.commit()
 
         fixture = Fixture(
             tenant_id=tenant.id,
             location_id=location.id,
             user_id=user.id,
-            challenges=[(c.id, c.nonce) for c in challenges],
+            qr_token=location.qr_token,
         )
 
     try:
@@ -229,8 +218,7 @@ def _naive_record(
         latitude=kwargs["latitude"],
         longitude=kwargs["longitude"],
         accuracy_meters=kwargs["accuracy_meters"],
-        challenge_id=kwargs["challenge_id"],
-        nonce=kwargs["nonce"],
+        qr_token=kwargs["qr_token"],
         audit_failures=False,
     )
     if not decision.verified:
@@ -298,23 +286,6 @@ def test_a_naive_unlocked_check_in_would_double_insert(
     assert count_events(engine, committed.tenant_id, "CHECK_IN") == 2
 
 
-def test_the_loser_of_a_check_in_race_consumes_no_challenge(
-    engine: Engine, committed: Fixture
-) -> None:
-    """State is checked under the lock, before any evidence is examined."""
-
-    def action(session: Session, index: int) -> AttendanceOutcome:
-        return attendance_service.check_in(session, **committed.evidence(index))
-
-    interleave(engine, action)
-
-    with Session(engine) as session:
-        loser_challenge = session.get(QRChallenge, committed.challenges[1][0])
-        assert loser_challenge is not None
-        assert loser_challenge.status == QRChallengeStatus.ACTIVE
-        assert loser_challenge.used_at is None
-
-
 # ---------------------------------------------------------------------------
 # 38. Concurrent check-out
 # ---------------------------------------------------------------------------
@@ -330,8 +301,7 @@ def test_two_simultaneous_check_outs_produce_exactly_one(
         session.commit()
 
     def action(session: Session, index: int) -> AttendanceOutcome:
-        # indices 1 and 2 are unused challenges
-        return attendance_service.check_out(session, **committed.evidence(index + 1))
+        return attendance_service.check_out(session, **committed.evidence())
 
     result = interleave(engine, action)
 
@@ -378,34 +348,6 @@ def test_concurrent_operations_leave_a_strictly_alternating_sequence(
         )
         is AttendanceState.NOT_CHECKED_IN
     )
-
-
-def test_a_challenge_is_never_consumed_without_an_event(
-    engine: Engine, committed: Fixture
-) -> None:
-    """The transaction boundary: consumed challenges and events stay in step."""
-
-    def action(session: Session, index: int) -> AttendanceOutcome:
-        return attendance_service.check_in(session, **committed.evidence(index))
-
-    interleave(engine, action)
-
-    with Session(engine) as session:
-        used = session.scalar(
-            select(func.count())
-            .select_from(QRChallenge)
-            .where(
-                QRChallenge.tenant_id == committed.tenant_id,
-                QRChallenge.status == QRChallengeStatus.USED.value,
-            )
-        )
-        events = session.scalar(
-            select(func.count())
-            .select_from(AttendanceEvent)
-            .where(AttendanceEvent.tenant_id == committed.tenant_id)
-        )
-
-    assert used == events == 1
 
 
 # ---------------------------------------------------------------------------
@@ -591,3 +533,138 @@ def test_events_written_in_one_transaction_get_distinct_timestamps(
 
     assert len(set(stamps)) == 2, "two events in one transaction shared a timestamp"
     assert stored_event_types(engine, committed.tenant_id) == ["CHECK_IN", "CHECK_OUT"]
+
+
+# ---------------------------------------------------------------------------
+# Concurrent auto-close of a forgotten checkout
+# ---------------------------------------------------------------------------
+#
+# `close_stale_session_for_user` and the in-band check inside `record_attendance`
+# can both discover the same stale CHECK_IN at once - one from the standalone
+# sweep (`app/jobs/close_stale_sessions.py`), one from the user's own next
+# check-in landing at the same instant. Both take the same user-row lock before
+# deciding anything, so only one of them ever writes the AUTO_CLOSED event; the
+# second finds it already closed and does nothing.
+
+
+def _make_stale_check_in(engine: Engine, fixture: Fixture) -> None:
+    """Commit a CHECK_IN older than the configured cutoff, directly."""
+    with Session(engine) as session:
+        stale_at = datetime.now(UTC) - timedelta(
+            hours=DEFAULT_MAX_SHIFT_HOURS, minutes=5
+        )
+        session.add(
+            AttendanceEvent(
+                tenant_id=fixture.tenant_id,
+                user_id=fixture.user_id,
+                event_type=AttendanceEventType.CHECK_IN.value,
+                event_timestamp=stale_at,
+                verification_status="VERIFIED",
+                verification_metadata={},
+            )
+        )
+        session.commit()
+
+
+def _naive_close(session: Session, fixture: Fixture, _index: int) -> bool:
+    """The same auto-close, **without** the user row lock: read, then write.
+
+    Both transactions read the stale CHECK_IN before either has written its
+    closing event, so both believe one is needed - the bug the lock exists to
+    prevent.
+    """
+    latest = attendance_service.get_latest_event(
+        session, tenant_id=fixture.tenant_id, user_id=fixture.user_id
+    )
+    if latest is None or AttendanceEventType(latest.event_type) is not (
+        AttendanceEventType.CHECK_IN
+    ):
+        return False
+    cutoff = timedelta(hours=DEFAULT_MAX_SHIFT_HOURS)
+    if datetime.now(UTC) - latest.event_timestamp <= cutoff:
+        return False
+
+    session.add(
+        AttendanceEvent(
+            tenant_id=fixture.tenant_id,
+            user_id=fixture.user_id,
+            event_type=AttendanceEventType.CHECK_OUT.value,
+            verification_status=VerificationStatus.AUTO_CLOSED.value,
+            verification_metadata={},
+        )
+    )
+    session.flush()
+    return True
+
+
+def count_auto_closed(engine: Engine, tenant_id: uuid.UUID) -> int:
+    with Session(engine) as session:
+        return session.scalar(
+            select(func.count())
+            .select_from(AttendanceEvent)
+            .where(
+                AttendanceEvent.tenant_id == tenant_id,
+                AttendanceEvent.verification_status == VerificationStatus.AUTO_CLOSED.value,
+            )
+        ) or 0
+
+
+def test_two_concurrent_auto_closes_produce_exactly_one_event(
+    engine: Engine, committed: Fixture
+) -> None:
+    _make_stale_check_in(engine, committed)
+
+    def action(session: Session, _index: int) -> bool:
+        return attendance_service.close_stale_session_for_user(
+            session, tenant_id=committed.tenant_id, user_id=committed.user_id
+        )
+
+    result = interleave(engine, action)
+
+    assert result.second_blocked, "no lock contention - the test proved nothing"
+    assert result.first is True
+    # The second call finds the session already closed - a no-op, not a failure.
+    assert result.second is False
+    assert count_auto_closed(engine, committed.tenant_id) == 1
+
+
+def test_a_naive_unlocked_auto_close_would_double_insert(
+    engine: Engine, committed: Fixture
+) -> None:
+    """Guards the test above from becoming vacuous.
+
+    If this stops failing, the harness has stopped creating real contention
+    and the locked test would pass regardless of the production code.
+    """
+    _make_stale_check_in(engine, committed)
+
+    def action(session: Session, index: int) -> bool:
+        return _naive_close(session, committed, index)
+
+    result = interleave(engine, action)
+
+    assert result.first is True
+    # Both "succeed" - two AUTO_CLOSED events for one stale CHECK_IN.
+    assert result.second is True
+    assert count_auto_closed(engine, committed.tenant_id) == 2
+
+
+def test_a_returning_check_in_closes_a_stale_session_and_proceeds(
+    engine: Engine, committed: Fixture
+) -> None:
+    """The common case: no sweep needed, the next check-in closes it inline."""
+    _make_stale_check_in(engine, committed)
+
+    with Session(engine) as session:
+        outcome = attendance_service.check_in(session, **committed.evidence())
+        session.commit()
+
+    assert outcome.success is True
+    assert outcome.auto_closed_previous_session is True
+    assert count_auto_closed(engine, committed.tenant_id) == 1
+    assert (
+        attendance_service.get_current_state(
+            Session(engine), tenant_id=committed.tenant_id, user_id=committed.user_id
+        )
+        is AttendanceState.CHECKED_IN
+    )

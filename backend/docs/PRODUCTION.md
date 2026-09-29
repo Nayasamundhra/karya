@@ -244,7 +244,7 @@ inside a request, `request_id`. One access line per request adds `method`, `path
 Deliberately absent: the **query string**, because a search term is user input that
 has no business sitting in a log retained for months; the raw path is logged, the
 query is not. Also absent: passwords, password hashes, access tokens, refresh
-tokens, QR nonces, `Authorization` headers, request bodies, and email addresses on
+tokens, `Authorization` headers, request bodies, and email addresses on
 failed logins (a log of attempted addresses is a list of accounts worth attacking -
 the tenant slug is logged instead, which is what an operator correlates by).
 
@@ -365,9 +365,12 @@ Recorded rather than hidden.
    single-use expiring tokens, anti-enumeration and its own rate limit; a
    half-built version would be worse than none.
 4. **GPS is evidence, not proof.** The server validates coordinates and accuracy
-   rigorously but cannot detect a spoofed location on a rooted device. The
-   single-use rotating QR is what raises the cost of that; device attestation
-   would raise it further and is deferred.
+   rigorously but cannot detect a spoofed location on a rooted device. Through
+   Phase 11 a single-use rotating QR partially raised the cost of that; Phase 12
+   replaced it with a static, never-expiring QR per location (trading that
+   defense for not needing kiosk hardware), so **GPS is now the only signal
+   that actually gates a check-in** — see item 10. Device attestation, which
+   would raise the cost of GPS spoofing directly, remains deferred.
 5. **`/docs` loads Swagger UI from a CDN**, so it renders blank in an air-gapped
    network. The API is unaffected, and `DOCS_ENABLED=false` turns the page off.
 6. **No access-token revocation.** Access tokens are valid until they expire
@@ -383,7 +386,18 @@ Recorded rather than hidden.
    the database host could still misorder events. NTP configured to slew rather
    than step addresses it; a monotonic sequence column would make it structural
    and is not implemented.
-8. **Single attendance location per tenant.** The schema supports several and the
-   QR is bound to a location, but the resolution logic picks the one active site.
+8. **Single attendance location per tenant.** The schema supports several, and
+   since Phase 12 the QR token itself resolves directly to its owning
+   location — `attendance_locations.qr_token` is unique — so multi-location
+   support needs only relaxing the `UNIQUE(tenant_id)` constraint, not a
+   resolution-logic change.
 9. **No supply-chain integrity.** `constraints.txt` pins versions but carries no
    hashes; see that file's own header for why, and for what it does not cover.
+10. **A leaked or over-shared static QR has no automatic mitigation.** Unlike
+    the rotating challenge it replaced, `attendance_locations.qr_token`
+    never expires and is never consumed, so a photo of the printed code
+    shared outside the office remains valid indefinitely until an admin
+    notices and calls `POST /tenant/me/location/qr-token/regenerate`. There
+    is no anomaly detection (e.g. many check-ins from GPS-implausible
+    locations in a short window) to surface that need automatically - it
+    depends entirely on GPS still rejecting the attempt, or a human noticing.

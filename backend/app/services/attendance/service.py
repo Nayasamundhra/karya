@@ -4,7 +4,7 @@ Phase 3 answers *"is Rahul physically present?"*. This module answers *"given
 that, should Karya record an attendance event?"* - and it is the only place that
 writes to ``attendance_events``.
 
-Two rules shape everything here:
+Three rules shape everything here:
 
 **Presence is verified as part of the action, never taken on trust.** The client
 cannot call ``/presence/verify`` and then tell us it passed. Every check-in and
@@ -13,15 +13,20 @@ check-out re-runs the real verification through
 cannot drift apart in their security behaviour. No GPS or QR logic is restated
 here.
 
-**One transaction covers state check, QR consumption and event creation.** The
-caller commits once at the end. If anything raises in between, the session is
-never committed and PostgreSQL discards the lot - so the database can never hold
-a consumed QR challenge with no attendance event to show for it.
+**One transaction covers the state check and event creation.** The caller
+commits once at the end. If anything raises in between, the session is never
+committed and PostgreSQL discards the lot.
+
+**A forgotten checkout is closed by the next thing that touches the user's
+row, not by editing the open event.** ``attendance_events`` is never edited or
+deleted - see :func:`close_stale_session_if_needed`, which every entry point
+below calls, under the same row lock, before deciding anything else.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -33,6 +38,7 @@ from app.models.attendance_event import (
     AttendanceEventType,
     VerificationStatus,
 )
+from app.models.attendance_location import DEFAULT_MAX_SHIFT_HOURS
 from app.models.audit_log import AuditLog
 from app.models.user import User
 from app.services.attendance.results import (
@@ -50,6 +56,7 @@ ACTION_CHECK_IN = "ATTENDANCE_CHECK_IN"
 ACTION_CHECK_OUT = "ATTENDANCE_CHECK_OUT"
 ACTION_CHECK_IN_FAILED = "ATTENDANCE_CHECK_IN_FAILED"
 ACTION_CHECK_OUT_FAILED = "ATTENDANCE_CHECK_OUT_FAILED"
+ACTION_AUTO_CLOSED = "ATTENDANCE_AUTO_CLOSED"
 
 _SUCCESS_ACTION = {
     AttendanceEventType.CHECK_IN: ACTION_CHECK_IN,
@@ -147,6 +154,110 @@ def _lock_user(
 
 
 # ---------------------------------------------------------------------------
+# Forgotten-checkout safety net
+# ---------------------------------------------------------------------------
+
+
+def close_stale_session_if_needed(
+    session: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    now: datetime | None = None,
+) -> bool:
+    """Auto-close a forgotten checkout, if the user's latest event needs it.
+
+    Called under the caller's existing user-row lock - both from
+    :func:`record_attendance` (the common case: the very next check-in a
+    returning employee makes) and from the standalone sweep in
+    ``app/jobs/close_stale_sessions.py`` (the tail case: someone who never
+    comes back at all, so nothing else would ever touch their row). Both
+    callers must hold the lock first; this function never takes it, so it
+    can be reused from either without re-deriving the locking rule.
+
+    The cutoff is **per tenant**, read from the tenant's own
+    ``attendance_locations.max_shift_hours`` - the same "site-specific
+    tuning knob lives on the location row" pattern already used for
+    ``geofence_radius_meters``, since what counts as a forgotten checkout
+    for a 9-to-5 office and for 24h on-call staff are genuinely different
+    numbers. ``DEFAULT_MAX_SHIFT_HOURS`` is only a fallback for the
+    practically-unreachable case of a stale session surviving its location
+    being deactivated.
+
+    Writes a ``CHECK_OUT`` event - never edits or removes the open
+    ``CHECK_IN`` - tagged ``VerificationStatus.AUTO_CLOSED`` and carrying no
+    GPS evidence, since none was collected. Returns whether it wrote one, so
+    the caller can report "your previous shift was closed automatically"
+    rather than staying silent about it.
+    """
+    now = now or datetime.now(UTC)
+
+    latest = get_latest_event(session, tenant_id=tenant_id, user_id=user_id)
+    if latest is None or AttendanceEventType(latest.event_type) is not (
+        AttendanceEventType.CHECK_IN
+    ):
+        return False
+
+    location = presence_service.get_active_attendance_location(
+        session, tenant_id=tenant_id
+    )
+    max_shift_hours = (
+        location.max_shift_hours if location is not None else DEFAULT_MAX_SHIFT_HOURS
+    )
+    if now - latest.event_timestamp <= timedelta(hours=max_shift_hours):
+        return False
+
+    event = AttendanceEvent(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        event_type=AttendanceEventType.CHECK_OUT.value,
+        verification_status=VerificationStatus.AUTO_CLOSED.value,
+        verification_metadata={
+            "reason": "max_shift_exceeded",
+            "cutoff_hours": max_shift_hours,
+            "check_in_event_id": str(latest.id),
+            "check_in_at": latest.event_timestamp.isoformat(),
+        },
+    )
+    session.add(event)
+    session.flush()
+
+    session.add(
+        AuditLog(
+            tenant_id=tenant_id,
+            actor_user_id=user_id,
+            action=ACTION_AUTO_CLOSED,
+            target_type=AttendanceEvent.__name__,
+            target_id=event.id,
+            log_metadata={
+                "check_in_event_id": str(latest.id),
+                "check_out_event_id": str(event.id),
+                "cutoff_hours": max_shift_hours,
+            },
+        )
+    )
+    return True
+
+
+def close_stale_session_for_user(
+    session: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    """Lock one user's row and auto-close their session if it is stale.
+
+    Standalone entry point for ``app/jobs/close_stale_sessions.py`` - the
+    tail case where nobody ever returns to trigger the in-band check inside
+    :func:`record_attendance`. Takes the same lock ``record_attendance``
+    does, so the two can never race for the same user.
+    """
+    if not _lock_user(session, tenant_id=tenant_id, user_id=user_id):
+        return False
+    return close_stale_session_if_needed(session, tenant_id=tenant_id, user_id=user_id)
+
+
+# ---------------------------------------------------------------------------
 # Audit
 # ---------------------------------------------------------------------------
 
@@ -157,9 +268,8 @@ def _build_metadata(
     """Assemble the evidence recorded against an attendance event.
 
     Built from the presence decision rather than restated, so the JSONB layout
-    stays defined in one place. Carries ``challenge_id`` but never the nonce:
-    the id is enough to correlate an event with the challenge that authorised
-    it, whereas the nonce is the secret the challenge protects.
+    stays defined in one place. Carries the matched ``location_id`` - enough
+    to correlate an event with which of the tenant's locations authorised it.
     """
     metadata: dict[str, Any] = {"attendance_state": state.value}
     if decision is None:
@@ -205,8 +315,7 @@ def record_attendance(
     latitude: float,
     longitude: float,
     accuracy_meters: float,
-    challenge_id: uuid.UUID,
-    nonce: str,
+    qr_token: uuid.UUID,
     config: Settings | None = None,
 ) -> AttendanceOutcome:
     """Record a check-in or check-out, if the user is present and eligible.
@@ -217,15 +326,16 @@ def record_attendance(
     Order of operations, and why:
 
     1. **Lock the user row** - serialises this user's attendance operations.
-    2. **Derive and validate state** - a duplicate check-in is refused *before*
-       any evidence is examined, so it cannot consume the office's current QR
-       challenge. The same reasoning Phase 3 applies to GPS failures.
-    3. **Verify presence** - GPS, then QR, then an atomic consume, all inside
-       the Phase 3 service.
-    4. **Insert the event** - only once presence has actually passed.
+    2. **Auto-close a stale session, if there is one** - a forgotten checkout
+       from days ago must not block today's check-in; see
+       :func:`close_stale_session_if_needed`.
+    3. **Derive and validate state** - a duplicate check-in is refused *before*
+       any evidence is examined.
+    4. **Verify presence** - GPS and the static QR, inside the Phase 3 service.
+    5. **Insert the event** - only once presence has actually passed.
 
     The caller owns the commit. Every write above lands in one transaction, so a
-    failure anywhere leaves neither a consumed challenge nor an orphaned event.
+    failure anywhere leaves nothing partially written.
     """
     config = config or settings
 
@@ -238,6 +348,10 @@ def record_attendance(
             state=AttendanceState.NOT_CHECKED_IN,
             reason=_WRONG_STATE_REASON[event_type],
         )
+
+    auto_closed = close_stale_session_if_needed(
+        session, tenant_id=tenant_id, user_id=user_id
+    )
 
     state = get_current_state(session, tenant_id=tenant_id, user_id=user_id)
 
@@ -256,7 +370,11 @@ def record_attendance(
             },
         )
         return AttendanceOutcome(
-            success=False, event_type=event_type, state=state, reason=reason
+            success=False,
+            event_type=event_type,
+            state=state,
+            reason=reason,
+            auto_closed_previous_session=auto_closed,
         )
 
     decision = presence_service.verify_presence(
@@ -266,8 +384,7 @@ def record_attendance(
         latitude=latitude,
         longitude=longitude,
         accuracy_meters=accuracy_meters,
-        challenge_id=challenge_id,
-        nonce=nonce,
+        qr_token=qr_token,
         config=config,
         # This module writes one richer audit row covering the whole attempt.
         audit_failures=False,
@@ -287,16 +404,17 @@ def record_attendance(
             action=_FAILURE_ACTION[event_type],
             tenant_id=tenant_id,
             actor_user_id=user_id,
-            target_id=decision.qr.challenge_id,
+            target_id=decision.qr.location_id,
             metadata=metadata,
         )
-        # State is unchanged: no event was written and the QR was not consumed.
+        # State is unchanged: no event was written.
         return AttendanceOutcome(
             success=False,
             event_type=event_type,
             state=state,
             reason=reason,
             presence=decision,
+            auto_closed_previous_session=auto_closed,
         )
 
     new_state = STATE_AFTER_EVENT[event_type]
@@ -328,8 +446,8 @@ def record_attendance(
             "attendance_event_id": str(event.id),
             "event_type": event_type.value,
             "attendance_state": new_state.value,
-            "challenge_id": (
-                str(decision.qr.challenge_id) if decision.qr.challenge_id else None
+            "location_id": (
+                str(decision.qr.location_id) if decision.qr.location_id else None
             ),
             "distance_meters": decision.gps.distance_meters,
             "accuracy_meters": decision.gps.accuracy_meters,
@@ -343,6 +461,7 @@ def record_attendance(
         event_id=event.id,
         event_timestamp=event.event_timestamp,
         presence=decision,
+        auto_closed_previous_session=auto_closed,
     )
 
 

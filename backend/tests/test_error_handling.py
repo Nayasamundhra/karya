@@ -418,8 +418,7 @@ def test_a_business_refusal_is_still_a_200(
             "latitude": 12.9716,
             "longitude": 77.5946,
             "accuracy_meters": 10.0,
-            "challenge_id": "00000000-0000-0000-0000-000000000000",
-            "nonce": "x" * 43,
+            "qr_token": "00000000-0000-0000-0000-000000000000",
         },
         headers=auth_header(token),
     )

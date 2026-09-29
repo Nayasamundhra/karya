@@ -35,7 +35,7 @@ from app.core.rate_limit import (
     get_rate_limiter,
     identity_digest,
 )
-from app.models import Tenant, User, UserRole
+from app.models import Tenant, User
 from tests.conftest import DEFAULT_PASSWORD, Org, auth_header
 
 RULE = RateLimitRule("test", limit=3, window_seconds=60)
@@ -390,64 +390,76 @@ def test_password_change_has_the_tightest_budget(
     assert codes[budget] == 429
 
 
-def test_qr_issuance_is_limited_per_issuer(
+def _verify_payload() -> dict[str, object]:
+    """Syntactically valid presence evidence - whether it resolves doesn't
+    matter for these tests, since `/presence/verify` always answers 200."""
+    return {
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "accuracy_meters": 10.0,
+        "qr_token": "00000000-0000-0000-0000-000000000000",
+    }
+
+
+def test_presence_verification_is_limited_per_user(
     client: TestClient,
     org_factory: Callable[..., Org],
-    location_factory: Callable[..., object],
 ) -> None:
     org = org_factory()
-    location_factory(org.tenant)
-    budget = settings.rate_limit_qr_challenge_per_minute
+    budget = settings.rate_limit_presence_per_minute
 
     codes = [
         client.post(
-            "/api/v1/presence/qr/challenge", headers=auth_header(org.manager_token)
+            "/api/v1/presence/verify",
+            json=_verify_payload(),
+            headers=auth_header(org.manager_token),
         ).status_code
         for _ in range(budget + 1)
     ]
 
-    assert codes[:budget] == [201] * budget
+    assert codes[:budget] == [200] * budget
     assert codes[budget] == 429
 
 
 def test_one_users_budget_is_not_another_users(
     client: TestClient,
     org_factory: Callable[..., Org],
-    location_factory: Callable[..., object],
 ) -> None:
     """Per-user keying, not per-address: an office behind one public address must
     not share a single budget."""
     org = org_factory()
-    location_factory(org.tenant)
-    budget = settings.rate_limit_qr_challenge_per_minute
+    budget = settings.rate_limit_presence_per_minute
 
     for _ in range(budget + 1):
         client.post(
-            "/api/v1/presence/qr/challenge", headers=auth_header(org.manager_token)
+            "/api/v1/presence/verify",
+            json=_verify_payload(),
+            headers=auth_header(org.manager_token),
         )
 
     # The admin, from the same address, is unaffected.
     assert (
         client.post(
-            "/api/v1/presence/qr/challenge", headers=auth_header(org.admin_token)
+            "/api/v1/presence/verify",
+            json=_verify_payload(),
+            headers=auth_header(org.admin_token),
         ).status_code
-        == 201
+        == 200
     )
 
 
 def test_an_unauthenticated_caller_cannot_spend_a_users_budget(
     client: TestClient,
     org_factory: Callable[..., Org],
-    location_factory: Callable[..., object],
 ) -> None:
     """Authentication runs before the counter, so a 401 costs nothing."""
     org = org_factory()
-    location_factory(org.tenant)
 
-    for _ in range(settings.rate_limit_qr_challenge_per_minute * 2):
+    for _ in range(settings.rate_limit_presence_per_minute * 2):
         assert (
             client.post(
-                "/api/v1/presence/qr/challenge",
+                "/api/v1/presence/verify",
+                json=_verify_payload(),
                 headers=auth_header("not-a-real-token"),
             ).status_code
             == 401
@@ -455,9 +467,11 @@ def test_an_unauthenticated_caller_cannot_spend_a_users_budget(
 
     assert (
         client.post(
-            "/api/v1/presence/qr/challenge", headers=auth_header(org.manager_token)
+            "/api/v1/presence/verify",
+            json=_verify_payload(),
+            headers=auth_header(org.manager_token),
         ).status_code
-        == 201
+        == 200
     )
 
 
@@ -523,27 +537,18 @@ def test_a_normal_working_day_never_hits_a_limit(
     """The regression this suite most needs to catch.
 
     A staff member's real day: log in, check in, take a break, come back, check out.
-    Every step needs its own fresh QR challenge, so this exercises the QR, presence
-    and attendance budgets together against the same user.
+    The QR is static now, so this mainly exercises the presence and attendance
+    budgets against the same user.
     """
     tenant = tenant_factory(slug="acme")
     location = location_factory(tenant)
-    manager = user_factory(
-        tenant, email="priya@acme.com", employee_code="MGR-1", role=UserRole.MANAGER
-    )
     user_factory(tenant, email="rahul@acme.com", employee_code="EMP-1")
     db_session.flush()
 
-    manager_token = login("acme", "priya@acme.com").json()["access_token"]
     staff_token = login("acme", "rahul@acme.com").json()["access_token"]
 
     def qr() -> dict[str, str]:
-        response = client.post(
-            "/api/v1/presence/qr/challenge", headers=auth_header(manager_token)
-        )
-        assert response.status_code == 201, response.text
-        body = response.json()
-        return {"challenge_id": body["challenge_id"], "nonce": body["nonce"]}
+        return {"qr_token": str(location.qr_token)}
 
     def act(path: str) -> Response:
         return client.post(

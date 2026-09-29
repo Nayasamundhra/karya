@@ -12,12 +12,11 @@ from app.models.attendance_event import (
 )
 from app.models.attendance_location import (
     DEFAULT_GEOFENCE_RADIUS_METERS,
+    DEFAULT_MAX_SHIFT_HOURS,
     AttendanceLocation,
 )
 from app.models.audit_log import AuditLog
-from app.models.display_token import DisplayToken
 from app.models.email_verification_token import EmailVerificationToken
-from app.models.qr_challenge import QRChallenge, QRChallengeStatus
 from app.models.refresh_token import RefreshToken
 from app.models.tenant import Tenant
 from app.models.user import User, UserRole, UserStatus
@@ -27,18 +26,16 @@ __all__ = [
     "AttendanceEvent",
     "AttendanceLocation",
     "AuditLog",
-    "DisplayToken",
     "EmailVerificationToken",
-    "QRChallenge",
     "RefreshToken",
     "Tenant",
     "User",
     # Value sets
     "AttendanceEventType",
-    "QRChallengeStatus",
     "UserRole",
     "UserStatus",
     "VerificationStatus",
     # Defaults
     "DEFAULT_GEOFENCE_RADIUS_METERS",
+    "DEFAULT_MAX_SHIFT_HOURS",
 ]

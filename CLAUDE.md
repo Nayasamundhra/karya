@@ -16,10 +16,18 @@ time. **Phases 1–11 are complete**: DB foundation → auth/RBAC → presence
 verification → attendance check-in/out → attendance reads → user/tenant
 management → production hardening → frontend/PWA architecture foundation →
 staff attendance experience → manager/admin dashboards → tenant self-service
-onboarding, email verification and office-display (kiosk) mode. A frontend
-redesign (role-specific screens, a richer design system — see
-`frontend/docs/design-system.md` once it lands) is in progress on top of
-Phase 11; no phase past that is scoped yet.
+onboarding, email verification and office-display (kiosk) mode. **Phase 12**
+then replaced Phase 3's rotating QR with one static, never-expiring QR token
+per attendance location (GPS is now the only signal that actually gates a
+check-in; the QR just identifies the location) and added a forgotten-checkout
+safety net (`attendance_locations.max_shift_hours`, per tenant, auto-closing
+a stale `CHECK_IN` with a system-generated, distinctly-tagged `CHECK_OUT`).
+Phase 11's office-display
+kiosk mechanism was retired outright as part of Phase 12 — it existed only to
+authenticate a screen that kept re-fetching a rotating code, which a static,
+printed QR has no use for. A frontend redesign (role-specific screens, a
+richer design system — see `frontend/docs/design-system.md` once it lands) is
+in progress on top of Phase 12; no phase past that is scoped yet.
 
 (`backend/README.md`'s own phase table and `frontend/README.md` lag behind
 the actual state of the tree in places neither has been updated yet — trust
@@ -122,11 +130,13 @@ app/
 │   ├── limits.py       rate-limit dependencies (the only wiring routes see)
 │   ├── probes.py       GET /health, GET /ready
 │   └── v1/             router.py + auth.py, presence.py, attendance.py,
-│                       users.py, tenant.py, onboarding.py, display.py
+│                       users.py, tenant.py, onboarding.py
 │                       (route handlers only — thin)
 ├── db/                 base.py (DeclarativeBase), session.py (engine/pool),
 │                       tenant_scope.py (tenant-scoped query helpers)
-├── models/             the 9 SQLAlchemy entities
+├── jobs/               standalone scripts run on an external schedule (not
+│                       imported by main.py) — close_stale_sessions.py
+├── models/             the 7 SQLAlchemy entities
 ├── schemas/            Pydantic request/response contracts
 └── services/            business logic, one package per domain:
     ├── auth/           password (Argon2id), jwt (access tokens),
@@ -141,13 +151,17 @@ app/
 
 ### Data model
 
-Nine tables, UUID primary keys throughout, `TIMESTAMPTZ` everywhere:
-`tenants`, `users`, `attendance_locations`, `qr_challenges`, `attendance_events`
-(source of truth for attendance — never a derived status column),
-`audit_logs` (append-only), `refresh_tokens` (hashed), `email_verification_tokens`
-and `display_tokens` (hashed, Phase 11: office-display kiosk auth). Every tenant-owned table
-carries `tenant_id`; deletion is governed per-FK (`RESTRICT`/`CASCADE`/`SET
-NULL`, never `cascade="all, delete-orphan"`) — see `backend/README.md` §9.
+Seven tables, UUID primary keys throughout, `TIMESTAMPTZ` everywhere:
+`tenants`, `users`, `attendance_locations` (carries `qr_token`, the static
+per-location QR value — see below), `attendance_events`
+(source of truth for attendance — never a derived status column, with one
+narrow exception: see "forgotten checkout" below), `audit_logs`
+(append-only), `refresh_tokens` (hashed) and `email_verification_tokens`
+(hashed). `qr_challenges` and `display_tokens` existed through Phase 11 and
+were dropped in Phase 12 along with the rotating-QR/kiosk mechanism they
+supported. Every tenant-owned table carries `tenant_id`; deletion is governed
+per-FK (`RESTRICT`/`CASCADE`/`SET NULL`, never `cascade="all,
+delete-orphan"`) — see `backend/README.md` §9.
 
 ### Load-bearing design decisions (do not casually "fix" these)
 
@@ -178,11 +192,32 @@ NULL`, never `cascade="all, delete-orphan"`) — see `backend/README.md` §9.
   second get an earlier timestamp than the check-in it followed under lock
   contention (Phase 7 fixed this as a real bug; see README §8f).
 - **Concurrency invariants are enforced by row locks (`SELECT ... FOR UPDATE`),
-  not read-then-write.** QR single-use is one conditional `UPDATE ... WHERE
-  status='ACTIVE' ...`; duplicate check-in/out is prevented by locking the
+  not read-then-write.** Duplicate check-in/out is prevented by locking the
   *user* row (attendance rows may not exist yet); last-admin protection locks
-  the tenant's admin rows. Lock order is always user → QR challenge, to avoid
-  deadlock.
+  the tenant's admin rows; auto-closing a forgotten checkout (see below) takes
+  the same user-row lock before deciding anything, so it can never race a
+  real check-in for the same person.
+- **The QR is static and GPS is the only signal that actually gates a
+  check-in.** `attendance_locations.qr_token` never expires and is never
+  consumed — it only tells the server which location a scan is against, in
+  contrast to the rotating, single-use challenge Phase 3 originally used.
+  This is a deliberate trade of that replay defense for not needing kiosk
+  hardware; the only compensating control is `POST
+  /tenant/me/location/qr-token/regenerate` (TENANT_ADMIN-only) for a
+  leaked/over-shared code. Do not reintroduce single-use/expiry semantics
+  without discussing the trade-off with the project owner first.
+- **A forgotten checkout is closed by an inserted event, never by editing the
+  open one.** A `CHECK_IN` older than the tenant's own
+  `attendance_locations.max_shift_hours` (a per-location setting, not a
+  global one — a 9-to-5 office and 24h on-call staff need different numbers)
+  is closed by `app.services.attendance.service.close_stale_session_if_needed` —
+  called both in-band (the user's own next check-in/out, under the lock
+  above) and by the standalone sweep `app/jobs/close_stale_sessions.py` (for
+  someone who never returns) — writing a `CHECK_OUT` tagged
+  `VerificationStatus.AUTO_CLOSED` with no GPS evidence. This is the one
+  deliberate, narrow exception to "no derived status column": the exception
+  is the auto-close *event* itself, not a cached status field, and every read
+  still derives state purely from events.
 - **No dependency was added in Phase 7.** Structured logging, rate limiting,
   correlation ids, security headers and request-size limits are deliberately
   stdlib + what FastAPI already brings — don't reach for a third-party package
@@ -207,15 +242,17 @@ Starlette already runs each `def` endpoint in a worker thread.
   clears counters between tests) — a limiter that blocks a legitimate flow is
   exactly the regression the suite exists to catch, and it can't catch that
   disabled.
-- The `*_concurrency.py` modules (`test_attendance_concurrency.py`,
-  `test_presence_concurrency.py`, `test_users_concurrency.py`,
-  `test_onboarding_concurrency.py`, `test_display_concurrency.py`) are the
-  only ones that commit to the database (real concurrency needs separate
-  connections) and clean up their own rows. Each also contains a deliberately
-  naive implementation asserted to *fail* under the same forced interleaving —
-  so if the harness ever stops creating real contention, that test fails
-  rather than the suite quietly passing. Follow this pattern for any new
-  concurrency-sensitive invariant.
+- The `*_concurrency.py` modules (`test_attendance_concurrency.py` —
+  including the check-in/out races and the auto-close race, `test_users_concurrency.py`,
+  `test_onboarding_concurrency.py`) are the only ones that commit to the
+  database (real concurrency needs separate connections) and clean up their
+  own rows. Each also contains a deliberately naive implementation asserted
+  to *fail* under the same forced interleaving — so if the harness ever stops
+  creating real contention, that test fails rather than the suite quietly
+  passing. Follow this pattern for any new concurrency-sensitive invariant.
+  (`test_presence_concurrency.py` and `test_display_concurrency.py` were
+  removed in Phase 12 along with the rotating QR challenge and the kiosk
+  mechanism whose races they proved.)
 - `test_health.py` makes any DB access raise, to prove liveness never queries
   the database — a useful pattern if you add other infra-independent checks.
 - To verify a change end-to-end over HTTP (not just unit tests), use the
@@ -276,20 +313,23 @@ Business logic lives in `src/features/*` and `src/lib/*`, never in
 src/
 ├── app/            App.tsx, router.tsx, providers.tsx
 ├── components/     ui/ (design-system primitives) · layout/ (shell) · feedback/
-├── features/       auth/, tenant/ (+ tenant/'s own attendance-location
-│                   self-service), users/ (+ users/admin/ for employee
-│                   management), attendance/ (check-in/out flow, history),
-│                   team/ (manager "who's working today" views), onboarding/
-│                   (self-registration, email verification, setup checklist),
-│                   display/ (office-display kiosk token management + the
-│                   kiosk screen itself) — schemas, forms, API-backed hooks
+├── features/       auth/, tenant/ (+ tenant's own attendance-location
+│                   self-service, including the static QR display/print view
+│                   and regenerate action), users/ (+ users/admin/ for
+│                   employee management), attendance/ (check-in/out flow,
+│                   history, forgotten-checkout/auto-closed states), team/
+│                   (manager "who's working today" views), onboarding/
+│                   (self-registration, email verification, setup checklist)
+│                   — schemas, forms, API-backed hooks. `display/` (Phase 11's
+│                   office-display kiosk) was removed in Phase 12 along with
+│                   the rotating QR it existed to serve.
 ├── hooks/          useGeolocation, useCameraStream, useOnlineStatus,
 │                   useInstallPrompt, useDebouncedValue
 ├── lib/            api/ (client + typed endpoints) · auth/ (session/tokens) ·
 │                   errors/ (describeError) · pwa/ · validation/ · utils/
-├── pages/          auth/, staff/, manager/, admin/, onboarding/, display/ —
-│                   one file per route, thin wrappers around the
-│                   corresponding features/ module
+├── pages/          auth/, staff/, manager/, admin/, onboarding/ — one file
+│                   per route, thin wrappers around the corresponding
+│                   features/ module
 ├── routes/         guards.tsx (RequireAuth, RequireRole)
 ├── stores/         authStore.ts, toastStore.ts — the only two Zustand stores
 ├── types/          api.generated.ts (OpenAPI codegen — never hand-edited)

@@ -1,11 +1,10 @@
-"""POST /api/v1/presence/verify (spec checks 30-43)."""
+"""POST /api/v1/presence/verify."""
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,17 +12,7 @@ from httpx import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import (
-    AttendanceEvent,
-    AttendanceLocation,
-    AuditLog,
-    QRChallenge,
-    QRChallengeStatus,
-    Tenant,
-    User,
-    UserRole,
-)
-from app.services.presence import qr as qr_service
+from app.models import AttendanceEvent, AttendanceLocation, AuditLog, Tenant, User, UserRole
 from app.services.presence.service import ACTION_PRESENCE_VERIFICATION_FAILED
 from tests.conftest import (
     OFFICE_LATITUDE,
@@ -44,18 +33,16 @@ class Scenario:
     location: AttendanceLocation
     staff: User
     token: str
-    challenge: QRChallenge
 
 
 @pytest.fixture
 def scenario(
-    db_session: Session,
     login: Callable[..., Response],
     tenant_factory: Callable[..., Tenant],
     user_factory: Callable[..., User],
     location_factory: Callable[..., AttendanceLocation],
 ) -> Callable[..., Scenario]:
-    """A tenant with a location, a STAFF member, and one active challenge."""
+    """A tenant with a location and one STAFF member."""
 
     def _make(slug: str = "acme", *, role: UserRole = UserRole.STAFF) -> Scenario:
         tenant = tenant_factory(slug=slug)
@@ -63,11 +50,7 @@ def scenario(
         email = f"staff@{slug}.com"
         staff = user_factory(tenant, email=email, role=role)
         token = login(slug, email).json()["access_token"]
-        challenge = qr_service.create_challenge(
-            db_session, tenant_id=tenant.id, location_id=location.id
-        )
-        db_session.flush()
-        return Scenario(tenant, location, staff, token, challenge)
+        return Scenario(tenant, location, staff, token)
 
     return _make
 
@@ -77,15 +60,14 @@ def evidence(scenario: Scenario, **overrides: object) -> dict[str, object]:
         "latitude": INSIDE_LATITUDE,
         "longitude": OFFICE_LONGITUDE,
         "accuracy_meters": 12.5,
-        "challenge_id": str(scenario.challenge.id),
-        "nonce": scenario.challenge.nonce,
+        "qr_token": str(scenario.location.qr_token),
     }
     payload.update(overrides)
     return payload
 
 
 # ---------------------------------------------------------------------------
-# 30-33. The four signal combinations
+# The four signal combinations
 # ---------------------------------------------------------------------------
 
 
@@ -116,7 +98,7 @@ def test_valid_gps_and_invalid_qr_is_rejected(
 
     response = client.post(
         VERIFY_URL,
-        json=evidence(s, nonce=qr_service.generate_nonce()),
+        json=evidence(s, qr_token=str(uuid.uuid4())),
         headers=auth_header(s.token),
     )
 
@@ -126,7 +108,7 @@ def test_valid_gps_and_invalid_qr_is_rejected(
     assert body["status"] == "PRESENCE_REJECTED"
     assert body["gps"]["verified"] is True
     assert body["qr"]["verified"] is False
-    assert body["reason"] == "QR_NONCE_MISMATCH"
+    assert body["reason"] == "QR_NOT_FOUND"
 
 
 def test_invalid_gps_and_valid_qr_is_rejected(
@@ -157,7 +139,7 @@ def test_invalid_gps_and_invalid_qr_is_rejected(
 
     response = client.post(
         VERIFY_URL,
-        json=evidence(s, latitude=OUTSIDE_LATITUDE, nonce=qr_service.generate_nonce()),
+        json=evidence(s, latitude=OUTSIDE_LATITUDE, qr_token=str(uuid.uuid4())),
         headers=auth_header(s.token),
     )
 
@@ -186,7 +168,6 @@ def test_poor_accuracy_is_rejected_over_http(
 
 def test_missing_attendance_location_is_rejected(
     client: TestClient,
-    db_session: Session,
     login: Callable[..., Response],
     tenant_factory: Callable[..., Tenant],
     user_factory: Callable[..., User],
@@ -201,8 +182,7 @@ def test_missing_attendance_location_is_rejected(
             "latitude": OFFICE_LATITUDE,
             "longitude": OFFICE_LONGITUDE,
             "accuracy_meters": 5.0,
-            "challenge_id": str(uuid.uuid4()),
-            "nonce": qr_service.generate_nonce(),
+            "qr_token": str(uuid.uuid4()),
         },
         headers=auth_header(token),
     )
@@ -213,13 +193,14 @@ def test_missing_attendance_location_is_rejected(
 
 
 # ---------------------------------------------------------------------------
-# 28 (over HTTP). Replay protection
+# The QR is static: reusable, and reusable across a rejected attempt
 # ---------------------------------------------------------------------------
 
 
-def test_the_same_qr_cannot_be_redeemed_twice(
+def test_the_same_qr_can_be_redeemed_repeatedly(
     client: TestClient, scenario: Callable[..., Scenario]
 ) -> None:
+    """No single-use enforcement any more - it is a printed code, not a nonce."""
     s = scenario()
     payload = evidence(s)
 
@@ -227,22 +208,12 @@ def test_the_same_qr_cannot_be_redeemed_twice(
     second = client.post(VERIFY_URL, json=payload, headers=auth_header(s.token))
 
     assert first.json()["verified"] is True
-    assert second.json()["verified"] is False
-    assert second.json()["reason"] == "QR_ALREADY_USED"
-    # GPS was still fine the second time - only the QR was spent.
-    assert second.json()["gps"]["verified"] is True
+    assert second.json()["verified"] is True
 
 
-def test_a_rejected_attempt_does_not_burn_the_challenge(
-    client: TestClient,
-    db_session: Session,
-    scenario: Callable[..., Scenario],
+def test_a_rejected_attempt_does_not_affect_the_qr(
+    client: TestClient, scenario: Callable[..., Scenario]
 ) -> None:
-    """The reason GPS is checked before the QR is consumed.
-
-    Otherwise anyone could stand outside and repeatedly destroy the office's
-    current code - a trivial denial of service against everyone present.
-    """
     s = scenario()
 
     outside = client.post(
@@ -252,37 +223,13 @@ def test_a_rejected_attempt_does_not_burn_the_challenge(
     )
     assert outside.json()["verified"] is False
 
-    challenge = db_session.scalar(
-        select(QRChallenge)
-        .where(QRChallenge.id == s.challenge.id)
-        .execution_options(populate_existing=True)
-    )
-    assert challenge is not None
-    assert challenge.status == QRChallengeStatus.ACTIVE
-    assert challenge.used_at is None
-
     # Somebody actually present can still use it.
     good = client.post(VERIFY_URL, json=evidence(s), headers=auth_header(s.token))
     assert good.json()["verified"] is True
 
 
-def test_expired_challenge_is_rejected_over_http(
-    client: TestClient,
-    db_session: Session,
-    scenario: Callable[..., Scenario],
-) -> None:
-    s = scenario()
-    s.challenge.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-    db_session.flush()
-
-    response = client.post(VERIFY_URL, json=evidence(s), headers=auth_header(s.token))
-
-    assert response.json()["reason"] == "QR_EXPIRED"
-    assert response.json()["verified"] is False
-
-
 # ---------------------------------------------------------------------------
-# 34-39. The client cannot influence identity or verdicts
+# The client cannot influence identity or verdicts
 # ---------------------------------------------------------------------------
 
 
@@ -293,8 +240,7 @@ def test_verify_requires_authentication(client: TestClient) -> None:
             "latitude": OFFICE_LATITUDE,
             "longitude": OFFICE_LONGITUDE,
             "accuracy_meters": 5.0,
-            "challenge_id": str(uuid.uuid4()),
-            "nonce": "anything",
+            "qr_token": str(uuid.uuid4()),
         },
     )
 
@@ -400,7 +346,7 @@ def test_query_and_header_injection_are_ignored(
         ("longitude", 181.0),
         ("longitude", -200.0),
         ("accuracy_meters", -1.0),
-        ("nonce", ""),
+        ("qr_token", "not-a-uuid"),
     ],
 )
 def test_malformed_evidence_is_a_validation_error(
@@ -433,41 +379,30 @@ def test_tenant_context_comes_from_the_token_not_the_request(
 
 
 # ---------------------------------------------------------------------------
-# 42-43. Cross-tenant isolation
+# Cross-tenant isolation
 # ---------------------------------------------------------------------------
 
 
-def test_cross_tenant_qr_validation_fails(
+def test_cross_tenant_qr_is_rejected(
     client: TestClient,
-    db_session: Session,
     scenario: Callable[..., Scenario],
 ) -> None:
-    """Rahul (Acme) must not redeem Beta's challenge, even standing at Beta."""
+    """Rahul (Acme) must not resolve Beta's QR, even standing at Beta."""
     acme = scenario(slug="acme")
     beta = scenario(slug="beta")
 
     response = client.post(
         VERIFY_URL,
-        json=evidence(acme, challenge_id=str(beta.challenge.id), nonce=beta.challenge.nonce),
+        json=evidence(acme, qr_token=str(beta.location.qr_token)),
         headers=auth_header(acme.token),
     )
 
     body = response.json()
     assert body["verified"] is False
     assert body["qr"]["verified"] is False
-    # Collapsed to NOT_FOUND: the response must not confirm the id exists
+    # Collapsed to NOT_FOUND: the response must not confirm the QR exists
     # elsewhere.
     assert body["reason"] == "QR_NOT_FOUND"
-
-    # Beta's challenge is untouched and still usable by Beta.
-    stored = db_session.scalar(
-        select(QRChallenge)
-        .where(QRChallenge.id == beta.challenge.id)
-        .execution_options(populate_existing=True)
-    )
-    assert stored is not None
-    assert stored.status == QRChallengeStatus.ACTIVE
-    assert stored.used_at is None
 
 
 def test_cross_tenant_probe_is_audited_with_the_precise_reason(
@@ -481,7 +416,7 @@ def test_cross_tenant_probe_is_audited_with_the_precise_reason(
 
     client.post(
         VERIFY_URL,
-        json=evidence(acme, challenge_id=str(beta.challenge.id), nonce=beta.challenge.nonce),
+        json=evidence(acme, qr_token=str(beta.location.qr_token)),
         headers=auth_header(acme.token),
     )
 
@@ -494,38 +429,8 @@ def test_cross_tenant_probe_is_audited_with_the_precise_reason(
     assert entry.actor_user_id == acme.staff.id
 
 
-def test_challenge_generation_is_scoped_to_the_callers_tenant(
-    client: TestClient,
-    db_session: Session,
-    login: Callable[..., Response],
-    tenant_factory: Callable[..., Tenant],
-    user_factory: Callable[..., User],
-    location_factory: Callable[..., AttendanceLocation],
-) -> None:
-    """A manager's challenge binds to their own tenant and location only."""
-    acme = tenant_factory(slug="acme")
-    beta = tenant_factory(slug="beta")
-    acme_location = location_factory(acme)
-    beta_location = location_factory(beta)
-    user_factory(acme, email="m@acme.com", role=UserRole.MANAGER)
-    token = login("acme", "m@acme.com").json()["access_token"]
-
-    created = client.post(
-        "/api/v1/presence/qr/challenge", headers=auth_header(token)
-    ).json()
-
-    challenge = db_session.scalar(
-        select(QRChallenge).where(QRChallenge.id == uuid.UUID(created["challenge_id"]))
-    )
-    assert challenge is not None
-    assert challenge.tenant_id == acme.id
-    assert challenge.location_id == acme_location.id
-    assert challenge.tenant_id != beta.id
-    assert challenge.location_id != beta_location.id
-
-
 # ---------------------------------------------------------------------------
-# 40. Phase 3 creates no attendance events
+# Presence creates no attendance events
 # ---------------------------------------------------------------------------
 
 
@@ -536,11 +441,12 @@ def test_no_attendance_event_is_ever_created(
 ) -> None:
     """Presence verification and attendance are separate concerns.
 
-    Turning verified presence into a check-in or check-out is Phase 4's job.
+    Turning verified presence into a check-in or check-out is a different
+    module's job.
     """
     s = scenario()
 
-    # A success, a replay, a geofence failure and a bad nonce.
+    # A success, a repeat use, a geofence failure and an unknown QR.
     client.post(VERIFY_URL, json=evidence(s), headers=auth_header(s.token))
     client.post(VERIFY_URL, json=evidence(s), headers=auth_header(s.token))
     client.post(
@@ -550,7 +456,7 @@ def test_no_attendance_event_is_ever_created(
     )
     client.post(
         VERIFY_URL,
-        json=evidence(s, nonce=qr_service.generate_nonce()),
+        json=evidence(s, qr_token=str(uuid.uuid4())),
         headers=auth_header(s.token),
     )
 
@@ -562,7 +468,7 @@ def test_successful_verification_is_not_audited_but_failures_are(
     db_session: Session,
     scenario: Callable[..., Scenario],
 ) -> None:
-    """Failures are the security signal; a success will become a Phase 4 event."""
+    """Failures are the security signal; a success is not repeated here."""
     s = scenario()
 
     client.post(VERIFY_URL, json=evidence(s), headers=auth_header(s.token))
@@ -573,7 +479,11 @@ def test_successful_verification_is_not_audited_but_failures_are(
     )
     assert failures == 0
 
-    client.post(VERIFY_URL, json=evidence(s), headers=auth_header(s.token))  # replay
+    client.post(
+        VERIFY_URL,
+        json=evidence(s, qr_token=str(uuid.uuid4())),
+        headers=auth_header(s.token),
+    )
     failures = db_session.scalar(
         select(func.count())
         .select_from(AuditLog)
@@ -582,13 +492,12 @@ def test_successful_verification_is_not_audited_but_failures_are(
     assert failures == 1
 
 
-def test_failure_audit_metadata_has_no_nonce(
+def test_failure_audit_metadata_has_no_password_hash(
     client: TestClient,
     db_session: Session,
     scenario: Callable[..., Scenario],
 ) -> None:
     s = scenario()
-    nonce = s.challenge.nonce
 
     client.post(
         VERIFY_URL,
@@ -601,7 +510,6 @@ def test_failure_audit_metadata_has_no_nonce(
     ).one()
     assert entry.log_metadata is not None
     rendered = str(entry.log_metadata)
-    assert nonce not in rendered
     assert "$argon2" not in rendered
     # It does keep the security-useful facts.
     assert entry.log_metadata["failure_reason"] == "OUTSIDE_GEOFENCE"
@@ -613,7 +521,7 @@ def test_decision_metadata_matches_the_documented_jsonb_shape(
     db_session: Session,
     scenario: Callable[..., Scenario],
 ) -> None:
-    """The shape Phase 4 will persist into attendance_events.verification_metadata."""
+    """The shape persisted into attendance_events.verification_metadata."""
     from app.services.presence import service as presence_service
 
     s = scenario()
@@ -624,8 +532,7 @@ def test_decision_metadata_matches_the_documented_jsonb_shape(
         latitude=INSIDE_LATITUDE,
         longitude=OFFICE_LONGITUDE,
         accuracy_meters=12.5,
-        challenge_id=s.challenge.id,
-        nonce=s.challenge.nonce,
+        qr_token=s.location.qr_token,
     )
 
     metadata = decision.to_verification_metadata()
@@ -633,9 +540,9 @@ def test_decision_metadata_matches_the_documented_jsonb_shape(
     assert decision.verified is True
     assert set(metadata) == {"gps", "qr"}
     assert set(metadata["gps"]) == {"verified", "distance_meters", "accuracy_meters"}
-    assert set(metadata["qr"]) == {"verified", "challenge_id"}
+    assert set(metadata["qr"]) == {"verified", "location_id"}
     assert metadata["gps"]["verified"] is True
-    assert metadata["qr"]["challenge_id"] == str(s.challenge.id)
+    assert metadata["qr"]["location_id"] == str(s.location.id)
 
 
 def test_office_coordinates_are_never_returned(

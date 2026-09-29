@@ -14,7 +14,10 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
-from app.models.attendance_location import DEFAULT_GEOFENCE_RADIUS_METERS
+from app.models.attendance_location import (
+    DEFAULT_GEOFENCE_RADIUS_METERS,
+    DEFAULT_MAX_SHIFT_HOURS,
+)
 from app.schemas.fields import LOCATION_DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, trim, trim_or_none
 
 LocationName = Annotated[
@@ -42,6 +45,13 @@ LocationDescription = Annotated[
 _MIN_RADIUS_METERS = 10
 _MAX_RADIUS_METERS = 5_000
 
+#: Loose bounds on the forgotten-checkout cutoff, not a labour-law opinion:
+#: 1h would auto-close a completely normal shift, 72h (three days) is
+#: generous enough for the longest legitimate on-call rotation while still
+#: catching a fat-fingered "700".
+_MIN_SHIFT_HOURS = 1
+_MAX_SHIFT_HOURS = 72
+
 
 class AttendanceLocationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True, extra="forbid")
@@ -52,7 +62,17 @@ class AttendanceLocationResponse(BaseModel):
     latitude: float
     longitude: float
     geofence_radius_meters: int
+    #: A CHECK_IN still open longer than this many hours is auto-closed - see
+    #: `app.services.attendance.service.close_stale_session_if_needed`.
+    max_shift_hours: int
     status: str
+    #: The value encoded in this location's printed/displayed QR code. Static
+    #: and reusable - see `app.models.attendance_location` - and not a secret
+    #: in the way the old rotating nonce was: it is meant to end up on a
+    #: poster, so returning it to every role this endpoint already serves
+    #: (any active user, per `GET /tenant/me/location`) reveals nothing a
+    #: photo of the wall wouldn't.
+    qr_token: uuid.UUID
     created_at: datetime
     updated_at: datetime
 
@@ -71,6 +91,11 @@ class AttendanceLocationCreateRequest(BaseModel):
         ge=_MIN_RADIUS_METERS,
         le=_MAX_RADIUS_METERS,
     )
+    max_shift_hours: int = Field(
+        default=DEFAULT_MAX_SHIFT_HOURS,
+        ge=_MIN_SHIFT_HOURS,
+        le=_MAX_SHIFT_HOURS,
+    )
 
 
 class AttendanceLocationUpdateRequest(BaseModel):
@@ -84,6 +109,9 @@ class AttendanceLocationUpdateRequest(BaseModel):
     longitude: float | None = Field(default=None, ge=-180, le=180)
     geofence_radius_meters: int | None = Field(
         default=None, ge=_MIN_RADIUS_METERS, le=_MAX_RADIUS_METERS
+    )
+    max_shift_hours: int | None = Field(
+        default=None, ge=_MIN_SHIFT_HOURS, le=_MAX_SHIFT_HOURS
     )
 
     @model_validator(mode="after")

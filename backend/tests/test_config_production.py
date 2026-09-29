@@ -273,7 +273,6 @@ def test_settings_where_zero_means_disabled(field: str) -> None:
         "rate_limit_login_failures_per_15_min",
         "rate_limit_refresh_per_minute",
         "rate_limit_password_change_per_15_min",
-        "rate_limit_qr_challenge_per_minute",
         "rate_limit_presence_per_minute",
         "rate_limit_attendance_per_minute",
         "rate_limit_admin_write_per_minute",

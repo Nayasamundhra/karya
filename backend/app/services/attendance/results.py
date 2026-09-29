@@ -84,6 +84,13 @@ class AttendanceOutcome:
     #: Present whenever presence was actually evaluated. ``None`` when the
     #: attempt was refused on state grounds before any evidence was examined.
     presence: PresenceDecision | None = None
+    #: True when this call found a stale CHECK_IN (older than the tenant's
+    #: own ``attendance_locations.max_shift_hours``) and auto-closed it
+    #: before evaluating the action actually requested. Surfaced so a client
+    #: can tell the user "your previous shift was closed automatically" rather
+    #: than silently
+    #: acting as if nothing happened first.
+    auto_closed_previous_session: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +135,10 @@ class AttendanceSession:
     check_out: datetime | None = None
     check_in_event_id: uuid.UUID | None = None
     check_out_event_id: uuid.UUID | None = None
+    #: True when ``check_out`` is a system-generated closing event
+    #: (``VerificationStatus.AUTO_CLOSED``) rather than a real checkout the
+    #: person performed - see `app.services.attendance.service`.
+    check_out_auto_closed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,3 +204,49 @@ class TeamAttendance:
 
     def count(self, status: DayStatus) -> int:
         return sum(1 for member in self.members if member.day.status is status)
+
+
+# ---------------------------------------------------------------------------
+# Hours worked - computed on read, same as everything else in this module.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class MemberHours:
+    """One colleague's hours worked, for the tenant dashboard.
+
+    Each figure is computed by clipping that colleague's sessions to the
+    relevant window (today / this week / this month) - see
+    ``app.services.attendance.queries.get_team_hours``. There is no stored
+    total anywhere; a still-open session simply clips to "now" each time this
+    is read, so the number moves in real time without anything writing to it.
+    """
+
+    user_id: uuid.UUID
+    name: str
+    employee_code: str
+    today_hours: float
+    week_hours: float
+    month_hours: float
+
+
+@dataclass(frozen=True, slots=True)
+class TeamHours:
+    """Hours worked across one tenant, as of the moment of the request."""
+
+    date: date_type
+    week_start: date_type
+    month_start: date_type
+    members: list[MemberHours] = field(default_factory=list)
+
+    @property
+    def total_today_hours(self) -> float:
+        return round(sum(m.today_hours for m in self.members), 2)
+
+    @property
+    def total_week_hours(self) -> float:
+        return round(sum(m.week_hours for m in self.members), 2)
+
+    @property
+    def total_month_hours(self) -> float:
+        return round(sum(m.month_hours for m in self.members), 2)

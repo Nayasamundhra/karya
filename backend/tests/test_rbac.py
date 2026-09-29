@@ -230,13 +230,13 @@ def test_role_mutation_is_confined_to_one_guarded_endpoint() -> None:
         "/api/v1/auth/refresh",
         "/api/v1/auth/logout",
         "/api/v1/auth/me",
-        "/api/v1/presence/qr/challenge",
         "/api/v1/presence/verify",
         "/api/v1/attendance/check-in",
         "/api/v1/attendance/check-out",
         "/api/v1/attendance/me",
         "/api/v1/attendance/me/history",
         "/api/v1/attendance/team/today",
+        "/api/v1/attendance/team/hours",
         "/api/v1/attendance/users/{user_id}",
         "/api/v1/attendance/users/{user_id}/history",
         # Phase 6 adds the only role-mutating route in Karya. It is confined to
@@ -250,25 +250,18 @@ def test_role_mutation_is_confined_to_one_guarded_endpoint() -> None:
         "/api/v1/users/{user_id}/deactivate",
         "/api/v1/users/{user_id}/audit",
         "/api/v1/tenant/me",
-        # Phase 11 adds self-service onboarding (the only public write
-        # endpoints in the API - see test_onboarding.py) and the
-        # office-display kiosk mechanism (a separate, non-user credential -
-        # see test_display.py). Neither path ends in "/role": the onboarding
-        # admin's role is fixed to TENANT_ADMIN at creation, never mutated,
-        # so the "exactly one role-mutating route" assertion above still
-        # holds unchanged.
+        # Phase 11 adds self-service onboarding - the only public write
+        # endpoints in the API (see test_onboarding.py). It does not end in
+        # "/role": the onboarding admin's role is fixed to TENANT_ADMIN at
+        # creation, never mutated, so the "exactly one role-mutating route"
+        # assertion above still holds unchanged.
         "/api/v1/onboarding/tenants",
         "/api/v1/onboarding/verify-email",
         "/api/v1/onboarding/resend-verification",
         "/api/v1/tenant/me/location",
-        "/api/v1/presence/qr/challenge/display",
-        "/api/v1/tenant/display-tokens",
-        "/api/v1/tenant/display-tokens/{display_token_id}/revoke",
-        # A kiosk revoking its own credential - authenticated by the display
-        # token itself, never a user, so it is not a "role mutation" surface
-        # either: `display.display_token_id` is derived from the token, not
-        # a request parameter, and the only thing it can revoke is itself.
-        "/api/v1/display/revoke-self",
+        # Regenerating the location's static QR is TENANT_ADMIN-gated, like
+        # every other write on the location - not a role mutation either.
+        "/api/v1/tenant/me/location/qr-token/regenerate",
     }
     # PATCH is now expected, but only on the user/tenant management routes that
     # Phase 6 introduced - never on auth, presence or attendance.

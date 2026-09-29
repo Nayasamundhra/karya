@@ -12,13 +12,15 @@ from app.schemas.attendance import (
     TeamAttendanceMember,
     TeamAttendanceResponse,
     TeamAttendanceSummary,
+    TeamHoursResponse,
+    TeamHoursTotals,
+    TeamMemberHoursResponse,
 )
 from app.schemas.auth import LoginRequest, RefreshTokenRequest, TokenResponse
 from app.schemas.presence import (
     GPSVerificationResult,
     PresenceVerificationRequest,
     PresenceVerificationResponse,
-    QRChallengeResponse,
     QRVerificationResult,
 )
 from app.schemas.user import UserResponse
@@ -36,6 +38,9 @@ __all__ = [
     "TeamAttendanceMember",
     "TeamAttendanceResponse",
     "TeamAttendanceSummary",
+    "TeamHoursResponse",
+    "TeamHoursTotals",
+    "TeamMemberHoursResponse",
     # auth
     "LoginRequest",
     "RefreshTokenRequest",
@@ -45,6 +50,5 @@ __all__ = [
     "GPSVerificationResult",
     "PresenceVerificationRequest",
     "PresenceVerificationResponse",
-    "QRChallengeResponse",
     "QRVerificationResult",
 ]

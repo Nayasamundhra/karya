@@ -44,28 +44,25 @@ class FailureReason(enum.StrEnum):
     OUTSIDE_GEOFENCE = "OUTSIDE_GEOFENCE"
 
     # --- QR ---
+    #: The static token in the scan does not resolve to any of this tenant's
+    #: attendance locations - a wrong, stale or tampered QR image. Also the
+    #: client-safe collapse target for ``QR_TENANT_MISMATCH`` below.
     QR_NOT_FOUND = "QR_NOT_FOUND"
-    QR_EXPIRED = "QR_EXPIRED"
-    QR_ALREADY_USED = "QR_ALREADY_USED"
-    QR_REVOKED = "QR_REVOKED"
-    QR_NONCE_MISMATCH = "QR_NONCE_MISMATCH"
-    #: Internal only - a challenge belonging to a different tenant.
+    #: Internal only - the token resolves to a real location, but not one
+    #: belonging to the caller's own tenant.
     QR_TENANT_MISMATCH = "QR_TENANT_MISMATCH"
-    #: Internal only - a challenge bound to a different attendance location.
-    QR_LOCATION_MISMATCH = "QR_LOCATION_MISMATCH"
 
 
 #: Reasons that must not be reported verbatim to a client.
 #:
-#: Telling a caller "that challenge belongs to another tenant" confirms the id
-#: exists somewhere, which is a cross-tenant existence oracle. Both mismatches
-#: therefore surface as an indistinguishable ``QR_NOT_FOUND`` - the same
-#: "missing or not yours" collapse used by ``app.db.tenant_scope``. The precise
-#: reason is still recorded in the audit log, where it is a genuine signal that
-#: somebody is probing across tenants.
+#: Telling a caller "that QR belongs to another tenant" confirms the token
+#: exists somewhere, which is a cross-tenant existence oracle. It therefore
+#: surfaces as an indistinguishable ``QR_NOT_FOUND`` - the same "missing or
+#: not yours" collapse used by ``app.db.tenant_scope``. The precise reason is
+#: still recorded in the audit log, where it is a genuine signal that somebody
+#: is probing across tenants.
 CLIENT_SAFE_REASON: Final[dict[FailureReason, FailureReason]] = {
     FailureReason.QR_TENANT_MISMATCH: FailureReason.QR_NOT_FOUND,
-    FailureReason.QR_LOCATION_MISMATCH: FailureReason.QR_NOT_FOUND,
 }
 
 
@@ -94,10 +91,16 @@ class GPSResult:
 
 @dataclass(frozen=True, slots=True)
 class QRResult:
-    """QR challenge verification result."""
+    """Static QR-token resolution result.
+
+    ``location_id`` is populated whenever the token resolved to a location at
+    all - including a cross-tenant match, before that gets collapsed to
+    ``QR_NOT_FOUND`` for the client - so the audit log can still correlate the
+    attempt.
+    """
 
     verified: bool
-    challenge_id: uuid.UUID | None = None
+    location_id: uuid.UUID | None = None
     reason: FailureReason | None = None
 
 
@@ -127,7 +130,7 @@ class PresenceDecision:
         deliberately matches the structure documented for that column:
 
             {"gps": {"verified": …, "distance_meters": …, "accuracy_meters": …},
-             "qr":  {"verified": …, "challenge_id": …}}
+             "qr":  {"verified": …, "location_id": …}}
         """
         metadata: dict[str, Any] = {
             "gps": {
@@ -137,8 +140,8 @@ class PresenceDecision:
             },
             "qr": {
                 "verified": self.qr.verified,
-                "challenge_id": (
-                    str(self.qr.challenge_id) if self.qr.challenge_id else None
+                "location_id": (
+                    str(self.qr.location_id) if self.qr.location_id else None
                 ),
             },
         }

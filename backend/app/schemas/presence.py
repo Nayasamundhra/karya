@@ -1,11 +1,12 @@
 """Request/response schemas for presence verification.
 
 The request model is the security boundary. It accepts *evidence only* -
-coordinates, accuracy, a challenge id and a nonce - and sets ``extra="forbid"``
-so an attempt to smuggle in ``tenant_id``, ``user_id``, ``gps_verified``,
-``qr_verified``, ``presence_verified`` or ``distance_meters`` is rejected with a
-422 rather than silently ignored. Loud refusal beats quiet discard: it makes a
-spoofing attempt visible instead of leaving the caller believing it worked.
+coordinates, accuracy and a QR token - and sets ``extra="forbid"`` so an
+attempt to smuggle in ``tenant_id``, ``user_id``, ``gps_verified``,
+``qr_verified``, ``presence_verified`` or ``distance_meters`` is rejected with
+a 422 rather than silently ignored. Loud refusal beats quiet discard: it
+makes a spoofing attempt visible instead of leaving the caller believing it
+worked.
 
 Every verified/derived value in the response is computed by the server.
 """
@@ -13,7 +14,6 @@ Every verified/derived value in the response is computed by the server.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,34 +24,15 @@ from app.services.presence.results import (
 )
 from app.services.presence.service import client_facing_reason
 
-#: Matches `qr_challenges.nonce VARCHAR(255)`.
-_NONCE_MAX_LENGTH = 255
-
-
-class QRChallengeResponse(BaseModel):
-    """A freshly issued challenge, for the office display to render as a QR.
-
-    The display encodes ``challenge_id`` and ``nonce`` into the QR image; those
-    two are all a phone needs to submit. Nothing else about the tenant, the
-    location or its coordinates is included - the server stays authoritative and
-    the QR stays compact.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    challenge_id: uuid.UUID
-    nonce: str
-    expires_at: datetime
-    #: Seconds of validity, so the display can schedule its next fetch without
-    #: doing clock arithmetic against a server timestamp.
-    expires_in: int
-
 
 class PresenceVerificationRequest(BaseModel):
     """Evidence submitted by a staff device.
 
-    Note what is absent: no identity, no tenant, no verdict, no distance. All of
-    those are derived from the bearer token and the database.
+    Note what is absent: no identity, no tenant, no verdict, no distance. All
+    of those are derived from the bearer token and the database.
+    ``qr_token`` is the static value printed/displayed at the office - it
+    never expires and is the same on every scan, so nothing here needs a
+    nonce or a challenge id any more.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -63,8 +44,7 @@ class PresenceVerificationRequest(BaseModel):
     #: Device-reported accuracy radius in metres. Stored and evaluated, never
     #: trusted as a verdict.
     accuracy_meters: float = Field(ge=0.0, allow_inf_nan=False)
-    challenge_id: uuid.UUID
-    nonce: str = Field(min_length=1, max_length=_NONCE_MAX_LENGTH)
+    qr_token: uuid.UUID
 
 
 class GPSVerificationResult(BaseModel):
@@ -82,7 +62,7 @@ class GPSVerificationResult(BaseModel):
 
 
 class QRVerificationResult(BaseModel):
-    """QR challenge outcome. Deliberately carries no nonce."""
+    """QR-token resolution outcome. Deliberately carries no location detail."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -100,7 +80,8 @@ class PresenceVerificationResponse(BaseModel):
     qr: QRVerificationResult
     #: Populated only on rejection, and only with a client-safe value: internal
     #: reasons such as QR_TENANT_MISMATCH collapse to QR_NOT_FOUND so the
-    #: response cannot be used to test whether an id exists in another tenant.
+    #: response cannot be used to test whether a location exists in another
+    #: tenant.
     reason: FailureReason | None = None
 
     @classmethod

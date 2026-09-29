@@ -31,7 +31,6 @@ def make_settings(**overrides: object) -> Settings:
         "environment": "test",
         "jwt_secret_key": "a-sufficiently-long-test-secret-key-1234",
         "max_gps_accuracy_meters": 100.0,
-        "qr_challenge_ttl_seconds": 30,
     }
     defaults.update(overrides)
     return Settings(_env_file=None, **defaults)  # type: ignore[arg-type]
