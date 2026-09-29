@@ -83,19 +83,11 @@ async function mockAuth(page: import('@playwright/test').Page, role: 'MANAGER' |
         latitude: 12.9716,
         longitude: 77.5946,
         geofence_radius_meters: 150,
+        max_shift_hours: 16,
         status: 'ACTIVE',
+        qr_token: '11111111-1111-1111-1111-111111111111',
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
-      }),
-    })
-  })
-  await page.route('**/api/v1/tenant/display-tokens', async (route) => {
-    if (route.request().method() !== 'GET') return route.fallback()
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        items: [{ id: 'disp-1', label: 'Lobby', created_at: '2026-01-01T00:00:00Z', last_used_at: null, revoked_at: null }],
       }),
     })
   })
@@ -178,6 +170,47 @@ function teamTodayResponse() {
   }
 }
 
+function teamHoursResponse() {
+  return {
+    date: '2026-08-22',
+    week_start: '2026-08-17',
+    month_start: '2026-08-01',
+    summary: { total_today_hours: 5.5, total_week_hours: 5.5, total_month_hours: 5.5 },
+    employees: [
+      {
+        user_id: '11111111-1111-1111-1111-111111111111',
+        name: 'Riya Sharma',
+        employee_code: 'EMP-1',
+        today_hours: 5.5,
+        week_hours: 5.5,
+        month_hours: 5.5,
+      },
+      {
+        user_id: '22222222-2222-2222-2222-222222222222',
+        name: 'Amit Kumar',
+        employee_code: 'EMP-2',
+        today_hours: 0,
+        week_hours: 0,
+        month_hours: 0,
+      },
+      {
+        user_id: '33333333-3333-3333-3333-333333333333',
+        name: 'Priya Nair',
+        employee_code: 'EMP-3',
+        today_hours: 0,
+        week_hours: 0,
+        month_hours: 0,
+      },
+    ],
+  }
+}
+
+async function mockTeamHours(page: import('@playwright/test').Page) {
+  await page.route('**/api/v1/attendance/team/hours**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(teamHoursResponse()) })
+  })
+}
+
 /**
  * `TeamAttendanceTable` renders a desktop `<table>` and a mobile card list
  * side by side, CSS-hidden per breakpoint (see `TeamAttendanceTable.tsx`) —
@@ -197,15 +230,17 @@ test.describe('manager dashboard (desktop table)', () => {
     await page.route('**/api/v1/attendance/team/today**', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(teamTodayResponse()) })
     })
+    await mockTeamHours(page)
 
     await login(page)
     await page.getByRole('navigation', { name: 'Primary' }).first().getByRole('link', { name: 'Team' }).click()
 
     await expect(page.getByRole('heading', { name: 'Team attendance' })).toBeVisible()
     await expect(page.getByText('Total Employees')).toBeVisible()
-    await expect(page.getByRole('table').getByText('Riya Sharma')).toBeVisible()
-    await expect(page.getByRole('table').getByText('Amit Kumar')).toBeVisible()
-    await expect(page.getByRole('table').getByText('Priya Nair')).toBeVisible()
+    await expect(page.getByRole('table', { name: "Today's attendance" }).getByText('Riya Sharma')).toBeVisible()
+    await expect(page.getByRole('table', { name: "Today's attendance" }).getByText('Amit Kumar')).toBeVisible()
+    await expect(page.getByRole('table', { name: "Today's attendance" }).getByText('Priya Nair')).toBeVisible()
+    await expect(page.getByText('Hours Today')).toBeVisible()
   })
 
   test('filters today\'s roster by status without another network request', async ({ page }) => {
@@ -215,10 +250,11 @@ test.describe('manager dashboard (desktop table)', () => {
       requestCount += 1
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(teamTodayResponse()) })
     })
+    await mockTeamHours(page)
 
     await login(page)
     await page.getByRole('navigation', { name: 'Primary' }).first().getByRole('link', { name: 'Team' }).click()
-    await expect(page.getByRole('table').getByText('Riya Sharma')).toBeVisible()
+    await expect(page.getByRole('table', { name: "Today's attendance" }).getByText('Riya Sharma')).toBeVisible()
 
     // Snapshot after the initial load rather than asserting an absolute
     // count of 1 — the app's real `QueryClient` has `refetchOnWindowFocus`
@@ -228,8 +264,8 @@ test.describe('manager dashboard (desktop table)', () => {
     // request of its own.
     const countBeforeFilter = requestCount
     await page.getByRole('button', { name: 'Completed' }).click()
-    await expect(page.getByRole('table').getByText('Riya Sharma')).toHaveCount(0)
-    await expect(page.getByRole('table').getByText('Amit Kumar')).toBeVisible()
+    await expect(page.getByRole('table', { name: "Today's attendance" }).getByText('Riya Sharma')).toHaveCount(0)
+    await expect(page.getByRole('table', { name: "Today's attendance" }).getByText('Amit Kumar')).toBeVisible()
 
     expect(requestCount).toBe(countBeforeFilter)
   })
@@ -239,6 +275,7 @@ test.describe('manager dashboard (desktop table)', () => {
     await page.route('**/api/v1/attendance/team/today**', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(teamTodayResponse()) })
     })
+    await mockTeamHours(page)
     await page.route('**/api/v1/attendance/users/11111111-1111-1111-1111-111111111111', async (route) => {
       await route.fulfill({
         status: 200,
@@ -280,7 +317,7 @@ test.describe('manager dashboard (desktop table)', () => {
 
     await login(page)
     await page.getByRole('navigation', { name: 'Primary' }).first().getByRole('link', { name: 'Team' }).click()
-    await page.getByRole('table').getByText('Riya Sharma').click()
+    await page.getByRole('table', { name: "Today's attendance" }).getByText('Riya Sharma').click()
 
     await expect(page.getByRole('heading', { name: 'Employee attendance' })).toBeVisible()
     await expect(page.getByText(/checked in at/i)).toBeVisible()
@@ -310,6 +347,7 @@ test.describe('manager dashboard (route guards, both viewports)', () => {
     await page.route('**/api/v1/attendance/team/today**', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(teamTodayResponse()) })
     })
+    await mockTeamHours(page)
 
     await login(page)
     await page.getByRole('navigation', { name: 'Primary' }).first().getByRole('link', { name: 'Team' }).click()

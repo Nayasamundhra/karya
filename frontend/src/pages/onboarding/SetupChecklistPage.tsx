@@ -1,4 +1,4 @@
-import { Check, MapPin, MonitorSmartphone, PartyPopper, Users } from 'lucide-react'
+import { Check, MapPin, PartyPopper, Users } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -11,7 +11,6 @@ import { useSetupStatus, type SetupStep } from '@/features/onboarding/useSetupSt
 
 const STEP_ICON: Record<SetupStep['id'], LucideIcon> = {
   location: MapPin,
-  display: MonitorSmartphone,
   employees: Users,
 }
 
@@ -35,7 +34,7 @@ export default function SetupChecklistPage() {
           Let's finish setting up{user ? `, ${user.name}` : ''}
         </h1>
         <p className="mt-1.5 text-sm text-foreground-muted">
-          Three steps, and your team can start checking in. You can always come back to this from Home.
+          Two steps, and your team can start checking in. You can always come back to this from Home.
         </p>
       </div>
 
@@ -57,13 +56,12 @@ export default function SetupChecklistPage() {
         <div className="flex flex-col gap-3">
           <Skeleton className="h-[76px] w-full rounded-lg" />
           <Skeleton className="h-[76px] w-full rounded-lg" />
-          <Skeleton className="h-[76px] w-full rounded-lg" />
         </div>
       ) : (
         <div className="flex flex-col gap-3">
           {/* Always true by the time this authenticated screen renders at
            * all — shown as already-done rather than omitted, so the
-           * checklist reads as real progress made, not three more chores. */}
+           * checklist reads as real progress made, not more chores. */}
           <DoneItem label="Organization created" />
           <DoneItem label="Email verified" />
           {steps.map((step) => (

@@ -11,7 +11,7 @@
  * consumer.
  *
  * The security boundary is unaffected either way: whatever a decoder reads
- * out of a QR code is just a `challenge_id` + `nonce` pair handed to
+ * out of a QR code is just a `qr_token` handed to
  * `POST /api/v1/presence/verify`, which is the only party that decides if
  * it's valid. This hook, and Phase 9's decoder, only ever produce evidence.
  */

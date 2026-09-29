@@ -67,16 +67,6 @@ export const routes: RouteObject[] = [
     },
   },
   {
-    // The office-display kiosk is a public, standalone screen — no login,
-    // no app shell, no nav. It authenticates itself with its own display
-    // token (see `src/features/display/`), never a user session.
-    path: '/display',
-    lazy: async () => {
-      const { default: KioskPage } = await import('@/pages/display/KioskPage')
-      return { Component: KioskPage }
-    },
-  },
-  {
     element: <RequireAuth />,
     children: [
       {
@@ -98,17 +88,15 @@ export const routes: RouteObject[] = [
             children: [
               { path: 'team', lazy: lazyRoute(() => import('@/pages/manager/TeamPage')) },
               { path: 'team/:userId', lazy: lazyRoute(() => import('@/pages/manager/EmployeeDetailPage')) },
-              // MANAGER is one of `QR_ISSUER_ROLES` on the backend — it may
-              // create/list/revoke display tokens exactly like TENANT_ADMIN.
-              // `OrganizationPage` itself narrows what a MANAGER actually
-              // sees to just the Displays tab; the Details/Location tabs
-              // (renaming the tenant, moving the geofence) stay admin-only.
-              { path: 'admin/organization', lazy: lazyRoute(() => import('@/pages/admin/OrganizationPage')) },
             ],
           },
           {
+            // Organization settings and the attendance location (renaming
+            // the tenant, moving the geofence, regenerating the QR) are all
+            // admin-level decisions — MANAGER has no route here at all.
             element: <RequireRole roles={['TENANT_ADMIN']} />,
             children: [
+              { path: 'admin/organization', lazy: lazyRoute(() => import('@/pages/admin/OrganizationPage')) },
               { path: 'admin/users', lazy: lazyRoute(() => import('@/pages/admin/UsersPage')) },
             ],
           },

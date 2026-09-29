@@ -32,3 +32,16 @@ export function formatDay(isoDate: string): string {
   // `YYYY-MM-DD` as local midnight, which can roll it back a day west of UTC.
   return new Date(`${isoDate}T00:00:00Z`).toLocaleDateString(undefined, { ...DATE_FORMAT, timeZone: 'UTC' })
 }
+
+/** "8h 30m" (or "45m" under an hour, or "8h" on an exact hour) — the one
+ * canonical hours format, used for both an employee's own hours (Home page)
+ * and the manager/tenant-admin dashboard's, so the same duration reads
+ * identically in both places. Originally written only in `WeekOverview.tsx`;
+ * moved here so it isn't a second, drifting copy. */
+export function formatHours(hours: number): string {
+  const wholeMinutes = Math.round(hours * 60)
+  const h = Math.floor(wholeMinutes / 60)
+  const m = wholeMinutes % 60
+  if (h === 0) return `${m}m`
+  return m === 0 ? `${h}h` : `${h}h ${m}m`
+}

@@ -39,12 +39,6 @@ export type EmailVerificationRequest = Schemas['EmailVerificationRequest']
 export type ResendVerificationRequest = Schemas['ResendVerificationRequest']
 export type ResendVerificationResponse = Schemas['ResendVerificationResponse']
 
-export type DisplayTokenCreateRequest = Schemas['DisplayTokenCreateRequest']
-export type DisplayTokenCreateResponse = Schemas['DisplayTokenCreateResponse']
-export type DisplayTokenResponse = Schemas['DisplayTokenResponse']
-export type DisplayTokenListResponse = Schemas['DisplayTokenListResponse']
-
-export type QRChallengeResponse = Schemas['QRChallengeResponse']
 export type PresenceVerificationRequest = Schemas['PresenceVerificationRequest']
 export type PresenceVerificationResponse = Schemas['PresenceVerificationResponse']
 
@@ -57,6 +51,9 @@ export type AttendanceSessionResponse = Schemas['AttendanceSessionResponse']
 export type TeamAttendanceResponse = Schemas['TeamAttendanceResponse']
 export type TeamAttendanceMember = Schemas['TeamAttendanceMember']
 export type TeamAttendanceSummary = Schemas['TeamAttendanceSummary']
+export type TeamHoursResponse = Schemas['TeamHoursResponse']
+export type TeamMemberHoursResponse = Schemas['TeamMemberHoursResponse']
+export type TeamHoursTotals = Schemas['TeamHoursTotals']
 
 export type UserRole = Schemas['UserRole']
 export type UserStatus = Schemas['UserStatus']

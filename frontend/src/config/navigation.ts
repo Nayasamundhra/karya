@@ -55,13 +55,10 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     id: 'admin-organization',
-    // A MANAGER lands on the same route but sees only the Displays content
-    // (`OrganizationPage`) — this label is written for that narrower case
-    // too, since it's the one both roles share.
     label: 'Organization',
     to: '/admin/organization',
     icon: Building2,
-    roles: ['MANAGER', 'TENANT_ADMIN'],
+    roles: ['TENANT_ADMIN'],
     showInBottomNav: false,
   },
   {

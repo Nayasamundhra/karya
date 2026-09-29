@@ -22,3 +22,13 @@ export function useUpdateLocation() {
     },
   })
 }
+
+export function useRegenerateQrToken() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => tenantApi.regenerateLocationQrToken(),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(['tenant', 'location'], updated)
+    },
+  })
+}

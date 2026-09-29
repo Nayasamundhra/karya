@@ -8,8 +8,8 @@ import { ApiError } from '@/lib/api/errors'
 import * as attendanceApi from '@/lib/api/endpoints/attendance'
 import { TestQueryProvider } from './helpers/testQueryClient'
 
-const CHALLENGE_ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6'
-const QR_TEXT = JSON.stringify({ challenge_id: CHALLENGE_ID, nonce: 'office-display-nonce' })
+const QR_TOKEN = '3fa85f64-5717-4562-b3fc-2c963f66afa6'
+const QR_TEXT = JSON.stringify({ qr_token: QR_TOKEN })
 
 vi.mock('@/lib/api/endpoints/attendance', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/endpoints/attendance')>()
@@ -78,7 +78,7 @@ describe('CheckInOutFlow', () => {
     expect(screen.queryByRole('button', { name: /simulate scan/i })).not.toBeInTheDocument()
   })
 
-  it('sends only the four evidence fields the backend accepts — never tenant_id or user_id', async () => {
+  it('sends only the three evidence fields the backend accepts — never tenant_id or user_id', async () => {
     mockGeolocationSuccess({ latitude: 12.9716, longitude: 77.5946, accuracy: 8 })
     vi.mocked(attendanceApi.checkIn).mockResolvedValue({
       success: true,
@@ -88,6 +88,7 @@ describe('CheckInOutFlow', () => {
       event_timestamp: '2026-08-22T09:04:00Z',
       presence: null,
       reason: null,
+      auto_closed_previous_session: false,
     })
     renderFlow()
 
@@ -99,10 +100,29 @@ describe('CheckInOutFlow', () => {
       latitude: 12.9716,
       longitude: 77.5946,
       accuracy_meters: 8,
-      challenge_id: CHALLENGE_ID,
-      nonce: 'office-display-nonce',
+      qr_token: QR_TOKEN,
     })
     expect(screen.getByText("You're checked in.")).toBeInTheDocument()
+  })
+
+  it('tells the employee when this check-in first closed a forgotten previous session', async () => {
+    mockGeolocationSuccess({ latitude: 12.9716, longitude: 77.5946, accuracy: 8 })
+    vi.mocked(attendanceApi.checkIn).mockResolvedValue({
+      success: true,
+      event_type: 'CHECK_IN',
+      status: 'CHECKED_IN',
+      attendance_event_id: 'evt-1',
+      event_timestamp: '2026-08-22T09:04:00Z',
+      presence: null,
+      reason: null,
+      auto_closed_previous_session: true,
+    })
+    renderFlow()
+
+    await startAndScan()
+
+    expect(await screen.findByText('Check-in successful')).toBeInTheDocument()
+    expect(screen.getByText(/previous shift closed automatically/i)).toBeInTheDocument()
   })
 
   it('shows the check-out success copy and calls the check-out endpoint for a check-out flow', async () => {
@@ -115,6 +135,7 @@ describe('CheckInOutFlow', () => {
       event_timestamp: '2026-08-22T17:30:00Z',
       presence: null,
       reason: null,
+      auto_closed_previous_session: false,
     })
     renderFlow('CHECK_OUT')
 
@@ -136,6 +157,7 @@ describe('CheckInOutFlow', () => {
       event_timestamp: '2026-08-22T09:00:00Z',
       presence: null,
       reason: null,
+      auto_closed_previous_session: false,
     })
     renderFlow()
     await userEvent.click(screen.getByRole('button', { name: /start check-in/i }))
@@ -150,7 +172,7 @@ describe('CheckInOutFlow', () => {
     expect(await screen.findByText('Check-in successful')).toBeInTheDocument()
   })
 
-  it('maps a QR_EXPIRED refusal to its message and offers "Scan again", which reopens the scanner', async () => {
+  it('maps a QR_NOT_FOUND refusal to its message and offers "Scan again", which reopens the scanner', async () => {
     mockGeolocationSuccess({ latitude: 1, longitude: 2, accuracy: 5 })
     vi.mocked(attendanceApi.checkIn).mockResolvedValue({
       success: false,
@@ -159,12 +181,13 @@ describe('CheckInOutFlow', () => {
       attendance_event_id: null,
       event_timestamp: null,
       presence: null,
-      reason: 'QR_EXPIRED',
+      reason: 'QR_NOT_FOUND',
+      auto_closed_previous_session: false,
     })
     renderFlow()
     await startAndScan()
 
-    expect(await screen.findByText(/this qr code has expired/i)).toBeInTheDocument()
+    expect(await screen.findByText(/isn't valid here/i)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /scan again/i }))
     expect(await screen.findByRole('button', { name: /simulate scan/i })).toBeInTheDocument()
   })
@@ -179,6 +202,7 @@ describe('CheckInOutFlow', () => {
       event_timestamp: null,
       presence: null,
       reason: 'OUTSIDE_GEOFENCE',
+      auto_closed_previous_session: false,
     })
     renderFlow()
     await startAndScan()

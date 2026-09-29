@@ -13,15 +13,13 @@
  * falls back to a generic message rather than rendering `undefined`.
  */
 const REASON_MESSAGES: Record<string, string> = {
-  QR_EXPIRED: 'This QR code has expired. Please scan the current code.',
-  QR_ALREADY_USED: 'This QR code has already been used. Please scan the current code.',
-  // QR_TENANT_MISMATCH and QR_LOCATION_MISMATCH never reach the client — the
-  // backend collapses both to QR_NOT_FOUND before responding (see
+  // QR_TENANT_MISMATCH never reaches the client — the backend collapses it
+  // to QR_NOT_FOUND before responding (see
   // `app.services.presence.results.CLIENT_SAFE_REASON`) — so one message
-  // covers "not found" and "wrong tenant" identically, by design.
-  QR_NOT_FOUND: "This QR code isn't valid. Please scan the current code.",
-  QR_REVOKED: 'This QR code is no longer active. Please scan the current code.',
-  QR_NONCE_MISMATCH: "This QR code isn't valid. Please scan the current code.",
+  // covers "not found" and "wrong tenant" identically, by design. The QR is
+  // static now (never expires, never gets "used up"), so this almost always
+  // means "wrong office's code."
+  QR_NOT_FOUND: "This QR code isn't valid here. Please scan your office's QR code.",
   OUTSIDE_GEOFENCE: 'You appear to be outside the office area.',
   GPS_ACCURACY_TOO_LOW:
     "Your location isn't accurate enough. Please move to an area with a clearer GPS signal and try again.",

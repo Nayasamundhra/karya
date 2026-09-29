@@ -59,7 +59,7 @@ describe('QrScanner', () => {
   }
 
   it('decodes a scanned code exactly once and stops the camera immediately', async () => {
-    vi.mocked(jsQR).mockReturnValue({ data: '{"challenge_id":"x","nonce":"y"}' } as ReturnType<typeof jsQR>)
+    vi.mocked(jsQR).mockReturnValue({ data: '{"qr_token":"x"}' } as ReturnType<typeof jsQR>)
     const onDecode = vi.fn()
     const { container } = render(<QrScanner active onDecode={onDecode} />)
     markVideoReady(container)
@@ -70,7 +70,7 @@ describe('QrScanner', () => {
     })
 
     expect(onDecode).toHaveBeenCalledTimes(1)
-    expect(onDecode).toHaveBeenCalledWith('{"challenge_id":"x","nonce":"y"}')
+    expect(onDecode).toHaveBeenCalledWith('{"qr_token":"x"}')
     expect(stopMock).toHaveBeenCalledTimes(1)
   })
 

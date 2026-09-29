@@ -230,57 +230,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/presence/qr/challenge": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Issue a short-lived QR challenge for the office display
-         * @description Mint a new dynamic QR challenge for the caller's own tenant.
-         *
-         *     The tenant and its attendance location are resolved from the authenticated
-         *     user, so a caller cannot issue a challenge for anyone else's site. The
-         *     challenge is single-use and expires after the configured TTL; the display is
-         *     expected to re-request one shortly before it lapses.
-         */
-        post: operations["create_qr_challenge_api_v1_presence_qr_challenge_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/presence/qr/challenge/display": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Issue a short-lived QR challenge, authenticated as a kiosk display
-         * @description The same challenge-issuance endpoint above, for an unattended kiosk.
-         *
-         *     Identical response shape and identical underlying service call - only the
-         *     caller's identity differs. A display token identifies one tenant's one
-         *     physical screen, never a person, so the issued challenge is audited with
-         *     no actor rather than attributed to whichever admin happened to set the
-         *     kiosk up.
-         */
-        post: operations["create_qr_challenge_for_display_api_v1_presence_qr_challenge_display_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/presence/verify": {
         parameters: {
             query?: never;
@@ -291,18 +240,20 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Verify physical presence from GPS and QR evidence
+         * Verify physical presence from GPS and a static QR token
          * @description Evaluate GPS + QR evidence for the authenticated user.
          *
-         *     Open to any authenticated, active user of the tenant - STAFF included, since
-         *     proving one's own presence is the normal staff action.
+         *     Open to any authenticated, active user of the tenant - STAFF included,
+         *     since proving one's own presence is the normal staff action.
          *
-         *     A rejection is returned as **200 with ``verified: false``**, not a 4xx: the
-         *     request was well-formed and processed, and the body carries a structured
-         *     verdict per signal. HTTP error codes are reserved for requests that could
-         *     not be processed at all (401 unauthenticated, 422 malformed evidence).
+         *     A rejection is returned as **200 with ``verified: false``**, not a 4xx:
+         *     the request was well-formed and processed, and the body carries a
+         *     structured verdict per signal. HTTP error codes are reserved for
+         *     requests that could not be processed at all (401 unauthenticated, 422
+         *     malformed evidence).
          *
-         *     The commit persists the audit row and, on success, the QR consumption.
+         *     The commit persists the audit row written on a rejection; nothing is
+         *     consumed on success - the QR token is static and reusable by design.
          */
         post: operations["verify_presence_api_v1_presence_verify_post"];
         delete?: never;
@@ -327,8 +278,7 @@ export interface paths {
          *     Presence is verified here as part of the action - a prior call to
          *     ``/presence/verify`` neither helps nor is trusted. The user must currently
          *     be ``NOT_CHECKED_IN``; a duplicate attempt is refused with
-         *     ``ALREADY_CHECKED_IN`` and, deliberately, without consuming the QR
-         *     challenge.
+         *     ``ALREADY_CHECKED_IN``.
          */
         post: operations["check_in_api_v1_attendance_check_in_post"];
         delete?: never;
@@ -351,8 +301,7 @@ export interface paths {
          * @description Record a CHECK_OUT for the authenticated user.
          *
          *     Requires a preceding CHECK_IN: without one the attempt is refused with
-         *     ``NOT_CHECKED_IN``. Needs its own fresh QR challenge, since the one that
-         *     authorised the check-in was consumed by it.
+         *     ``NOT_CHECKED_IN``.
          */
         post: operations["check_out_api_v1_attendance_check_out_post"];
         delete?: never;
@@ -421,6 +370,30 @@ export interface paths {
          *     as ``NO_RECORD`` - they are precisely who a manager is looking for.
          */
         get: operations["read_team_attendance_api_v1_attendance_team_today_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attendance/team/hours": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Hours worked today/this week/this month across the caller's tenant
+         * @description Every active user's hours worked, computed fresh from events.
+         *
+         *     Same tenant-viewer gate as ``/team/today``. See
+         *     ``app.services.attendance.queries.get_team_hours`` for exactly how an
+         *     open or auto-closed session is counted.
+         */
+        get: operations["read_team_hours_api_v1_attendance_team_hours_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -766,35 +739,7 @@ export interface paths {
         patch: operations["update_own_location_api_v1_tenant_me_location_patch"];
         trace?: never;
     };
-    "/api/v1/tenant/display-tokens": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List this tenant's office-display kiosks
-         * @description Never includes a raw token - only what was true at creation time plus
-         *     each kiosk's revocation/heartbeat state, enough to decide which to revoke.
-         */
-        get: operations["list_display_tokens_api_v1_tenant_display_tokens_get"];
-        put?: never;
-        /**
-         * Mint a credential for one office-display kiosk
-         * @description Mint a new kiosk credential. The raw token is returned exactly once.
-         *
-         *     Store it in the kiosk's browser immediately - there is no way to
-         *     retrieve it again, only to revoke it and mint a replacement.
-         */
-        post: operations["create_display_token_api_v1_tenant_display_tokens_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/tenant/display-tokens/{display_token_id}/revoke": {
+    "/api/v1/tenant/me/location/qr-token/regenerate": {
         parameters: {
             query?: never;
             header?: never;
@@ -804,41 +749,15 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Revoke one office-display kiosk's credential
-         * @description Immediately and permanently disable one kiosk's credential.
+         * Regenerate the printed QR code for the caller's attendance location
+         * @description Mint a fresh QR token; the old printed code stops working immediately.
          *
-         *     404, not 403, for a display token belonging to another tenant - the same
-         *     "cross-tenant lookups don't exist" posture every other admin route uses.
+         *     TENANT_ADMIN only, same as creating/updating the location itself. This
+         *     is the compensating control for a leaked or over-shared static QR - there
+         *     is no rotation left to age a compromised code out on its own, so
+         *     invalidating it is a deliberate action instead.
          */
-        post: operations["revoke_display_token_api_v1_tenant_display_tokens__display_token_id__revoke_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/display/revoke-self": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * A kiosk revokes its own credential
-         * @description Let a kiosk disable itself - the "Reset this display" control.
-         *
-         *     Deliberately narrow: a display token can revoke only the one row its own
-         *     token identifies (`display.display_token_id`, derived from the token
-         *     itself, never a request parameter - the same "identity is derived, not
-         *     accepted" posture every tenant-scoped route already uses), so a leaked
-         *     display token gains no capability beyond killing itself. There is no
-         *     "un-revoke" - a reset kiosk needs a freshly minted token from an admin,
-         *     same as any other revoked display.
-         */
-        post: operations["revoke_self_api_v1_display_revoke_self_post"];
+        post: operations["regenerate_location_qr_token_api_v1_tenant_me_location_qr_token_regenerate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -853,8 +772,8 @@ export interface components {
          * AttendanceActionRequest
          * @description Evidence for a check-in or check-out.
          *
-         *     Identical to the presence contract: coordinates, accuracy, challenge id and
-         *     nonce. Note what is *absent* - no user, no tenant, no timestamp, no event
+         *     Identical to the presence contract: coordinates, accuracy and a QR
+         *     token. Note what is *absent* - no user, no tenant, no timestamp, no event
          *     type and no verdict. Those are all determined by the server, and inherited
          *     ``extra="forbid"`` turns an attempt to supply one into a 422 rather than a
          *     silently ignored field.
@@ -867,12 +786,10 @@ export interface components {
             /** Accuracy Meters */
             accuracy_meters: number;
             /**
-             * Challenge Id
+             * Qr Token
              * Format: uuid
              */
-            challenge_id: string;
-            /** Nonce */
-            nonce: string;
+            qr_token: string;
         };
         /**
          * AttendanceActionResponse
@@ -898,6 +815,11 @@ export interface components {
             presence?: components["schemas"]["PresenceSummary"] | null;
             /** Reason */
             reason?: string | null;
+            /**
+             * Auto Closed Previous Session
+             * @default false
+             */
+            auto_closed_previous_session: boolean;
         };
         /**
          * AttendanceDayResponse
@@ -972,6 +894,11 @@ export interface components {
              * @default 150
              */
             geofence_radius_meters: number;
+            /**
+             * Max Shift Hours
+             * @default 16
+             */
+            max_shift_hours: number;
         };
         /** AttendanceLocationResponse */
         AttendanceLocationResponse: {
@@ -990,8 +917,15 @@ export interface components {
             longitude: number;
             /** Geofence Radius Meters */
             geofence_radius_meters: number;
+            /** Max Shift Hours */
+            max_shift_hours: number;
             /** Status */
             status: string;
+            /**
+             * Qr Token
+             * Format: uuid
+             */
+            qr_token: string;
             /**
              * Created At
              * Format: date-time
@@ -1018,6 +952,8 @@ export interface components {
             longitude?: number | null;
             /** Geofence Radius Meters */
             geofence_radius_meters?: number | null;
+            /** Max Shift Hours */
+            max_shift_hours?: number | null;
         };
         /**
          * AttendanceSessionResponse
@@ -1036,6 +972,11 @@ export interface components {
             check_in_event_id?: string | null;
             /** Check Out Event Id */
             check_out_event_id?: string | null;
+            /**
+             * Check Out Auto Closed
+             * @default false
+             */
+            check_out_auto_closed: boolean;
         };
         /**
          * AttendanceState
@@ -1081,58 +1022,6 @@ export interface components {
          * @enum {string}
          */
         DayStatus: "NO_RECORD" | "CHECKED_IN" | "COMPLETED";
-        /** DisplayTokenCreateRequest */
-        DisplayTokenCreateRequest: {
-            /** Label */
-            label: string;
-        };
-        /**
-         * DisplayTokenCreateResponse
-         * @description Returned once, on creation. The raw token is never retrievable again.
-         */
-        DisplayTokenCreateResponse: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Label */
-            label: string;
-            /** Token */
-            token: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** DisplayTokenListResponse */
-        DisplayTokenListResponse: {
-            /** Items */
-            items: components["schemas"]["DisplayTokenResponse"][];
-        };
-        /**
-         * DisplayTokenResponse
-         * @description One row in the listing - never the raw token.
-         */
-        DisplayTokenResponse: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Label */
-            label: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Last Used At */
-            last_used_at: string | null;
-            /** Revoked At */
-            revoked_at: string | null;
-        };
         /**
          * EmailVerificationRequest
          * @description Body for ``POST /api/v1/onboarding/verify-email``.
@@ -1149,7 +1038,7 @@ export interface components {
          *     mapping applied before a reason reaches an API response.
          * @enum {string}
          */
-        FailureReason: "NO_ACTIVE_ATTENDANCE_LOCATION" | "GPS_INVALID" | "GPS_ACCURACY_TOO_LOW" | "OUTSIDE_GEOFENCE" | "QR_NOT_FOUND" | "QR_EXPIRED" | "QR_ALREADY_USED" | "QR_REVOKED" | "QR_NONCE_MISMATCH" | "QR_TENANT_MISMATCH" | "QR_LOCATION_MISMATCH";
+        FailureReason: "NO_ACTIVE_ATTENDANCE_LOCATION" | "GPS_INVALID" | "GPS_ACCURACY_TOO_LOW" | "OUTSIDE_GEOFENCE" | "QR_NOT_FOUND" | "QR_TENANT_MISMATCH";
         /**
          * GPSVerificationResult
          * @description Server-computed GPS outcome.
@@ -1259,8 +1148,11 @@ export interface components {
          * PresenceVerificationRequest
          * @description Evidence submitted by a staff device.
          *
-         *     Note what is absent: no identity, no tenant, no verdict, no distance. All of
-         *     those are derived from the bearer token and the database.
+         *     Note what is absent: no identity, no tenant, no verdict, no distance. All
+         *     of those are derived from the bearer token and the database.
+         *     ``qr_token`` is the static value printed/displayed at the office - it
+         *     never expires and is the same on every scan, so nothing here needs a
+         *     nonce or a challenge id any more.
          */
         PresenceVerificationRequest: {
             /** Latitude */
@@ -1270,12 +1162,10 @@ export interface components {
             /** Accuracy Meters */
             accuracy_meters: number;
             /**
-             * Challenge Id
+             * Qr Token
              * Format: uuid
              */
-            challenge_id: string;
-            /** Nonce */
-            nonce: string;
+            qr_token: string;
         };
         /**
          * PresenceVerificationResponse
@@ -1290,33 +1180,8 @@ export interface components {
             reason?: components["schemas"]["FailureReason"] | null;
         };
         /**
-         * QRChallengeResponse
-         * @description A freshly issued challenge, for the office display to render as a QR.
-         *
-         *     The display encodes ``challenge_id`` and ``nonce`` into the QR image; those
-         *     two are all a phone needs to submit. Nothing else about the tenant, the
-         *     location or its coordinates is included - the server stays authoritative and
-         *     the QR stays compact.
-         */
-        QRChallengeResponse: {
-            /**
-             * Challenge Id
-             * Format: uuid
-             */
-            challenge_id: string;
-            /** Nonce */
-            nonce: string;
-            /**
-             * Expires At
-             * Format: date-time
-             */
-            expires_at: string;
-            /** Expires In */
-            expires_in: number;
-        };
-        /**
          * QRVerificationResult
-         * @description QR challenge outcome. Deliberately carries no nonce.
+         * @description QR-token resolution outcome. Deliberately carries no location detail.
          */
         QRVerificationResult: {
             /** Verified */
@@ -1434,6 +1299,71 @@ export interface components {
             checked_in: number;
             /** Completed */
             completed: number;
+        };
+        /**
+         * TeamHoursResponse
+         * @description Hours worked across the caller's own tenant, as of the request.
+         *
+         *     Every figure here is computed fresh from ``attendance_events`` on this
+         *     request - there is no stored total. A still-open check-in contributes
+         *     elapsed time up to the moment of the request, so the numbers move on
+         *     their own between requests without anything writing to them; a session
+         *     the forgotten-checkout safety net auto-closed contributes up to that
+         *     system-generated checkout, same as a session the person closed
+         *     themselves.
+         */
+        TeamHoursResponse: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /**
+             * Week Start
+             * Format: date
+             */
+            week_start: string;
+            /**
+             * Month Start
+             * Format: date
+             */
+            month_start: string;
+            summary: components["schemas"]["TeamHoursTotals"];
+            /** Employees */
+            employees: components["schemas"]["TeamMemberHoursResponse"][];
+        };
+        /**
+         * TeamHoursTotals
+         * @description Team-wide totals - the sum of every employee's own figure below.
+         */
+        TeamHoursTotals: {
+            /** Total Today Hours */
+            total_today_hours: number;
+            /** Total Week Hours */
+            total_week_hours: number;
+            /** Total Month Hours */
+            total_month_hours: number;
+        };
+        /**
+         * TeamMemberHoursResponse
+         * @description One colleague's hours worked, for the tenant dashboard.
+         */
+        TeamMemberHoursResponse: {
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /** Name */
+            name: string;
+            /** Employee Code */
+            employee_code: string;
+            /** Today Hours */
+            today_hours: number;
+            /** Week Hours */
+            week_hours: number;
+            /** Month Hours */
+            month_hours: number;
         };
         /**
          * TenantOnboardingRequest
@@ -2112,88 +2042,6 @@ export interface operations {
             };
         };
     };
-    create_qr_challenge_api_v1_presence_qr_challenge_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QRChallengeResponse"];
-                };
-            };
-            /** @description Insufficient permissions */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No active attendance location is configured */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Too many requests */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    create_qr_challenge_for_display_api_v1_presence_qr_challenge_display_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QRChallengeResponse"];
-                };
-            };
-            /** @description Not authenticated */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No active attendance location is configured */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Too many requests */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     verify_presence_api_v1_presence_verify_post: {
         parameters: {
             query?: never;
@@ -2460,6 +2308,40 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    read_team_hours_api_v1_attendance_team_hours_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamHoursResponse"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -3424,7 +3306,7 @@ export interface operations {
             };
         };
     };
-    list_display_tokens_api_v1_tenant_display_tokens_get: {
+    regenerate_location_qr_token_api_v1_tenant_me_location_qr_token_regenerate_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -3439,32 +3321,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DisplayTokenListResponse"];
+                    "application/json": components["schemas"]["AttendanceLocationResponse"];
                 };
             };
-        };
-    };
-    create_display_token_api_v1_tenant_display_tokens_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DisplayTokenCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
+            /** @description Not authenticated */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["DisplayTokenCreateResponse"];
-                };
+                content?: never;
             };
             /** @description Insufficient permissions */
             403: {
@@ -3473,93 +3338,12 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Set up your attendance location before creating a display */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description Too many requests */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    revoke_display_token_api_v1_tenant_display_tokens__display_token_id__revoke_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                display_token_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DisplayTokenResponse"];
-                };
-            };
-            /** @description No such display token */
+            /** @description No attendance location is configured yet */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description Too many requests */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    revoke_self_api_v1_display_revoke_self_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DisplayTokenResponse"];
-                };
             };
             /** @description Too many requests */
             429: {

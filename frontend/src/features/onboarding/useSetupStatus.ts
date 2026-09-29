@@ -1,9 +1,8 @@
 import { useLocation } from '@/features/tenant/useLocation'
-import { useDisplayTokens } from '@/features/display/useDisplayTokens'
 import { useUsersList } from '@/features/users/admin/useUsersList'
 
 export interface SetupStep {
-  id: 'location' | 'display' | 'employees'
+  id: 'location' | 'employees'
   label: string
   done: boolean
   to: string
@@ -22,21 +21,25 @@ export interface SetupStatus {
 }
 
 /**
- * Derives the PRD §6 setup checklist ("configure location", "set up a
- * display", "add employees") from data the app already fetches elsewhere —
- * there is no dedicated backend "onboarding status" endpoint, and none is
- * needed: each step's completion is exactly what its own feature page
- * already queries for.
+ * Derives the setup checklist ("configure location", "add employees") from
+ * data the app already fetches elsewhere — there is no dedicated backend
+ * "onboarding status" endpoint, and none is needed: each step's completion
+ * is exactly what its own feature page already queries for.
+ *
+ * A separate "set up a display" step existed through Phase 11, when a kiosk
+ * screen had to be provisioned with its own credential. Phase 12's static
+ * QR is created automatically alongside the location itself (see
+ * `AttendanceLocationCard`'s QR panel), so there is nothing left to set up
+ * as a distinct step.
  */
 export function useSetupStatus(): SetupStatus {
   const location = useLocation()
-  const displays = useDisplayTokens()
   // One row is enough to know whether *any* employee exists; the tenant's
   // own onboarding admin (`ADMIN-1`) is always present, so "done" means more
   // than that one row.
   const users = useUsersList({ pageSize: 2 })
 
-  const isLoading = location.isLoading || displays.isLoading || users.isLoading
+  const isLoading = location.isLoading || users.isLoading
 
   const steps: SetupStep[] = [
     {
@@ -45,13 +48,6 @@ export function useSetupStatus(): SetupStatus {
       done: Boolean(location.data),
       to: '/admin/organization',
       cta: 'Set up location',
-    },
-    {
-      id: 'display',
-      label: 'Set up an attendance display',
-      done: Boolean(displays.data && displays.data.items.length > 0),
-      to: '/admin/organization',
-      cta: 'Create a display',
     },
     {
       id: 'employees',

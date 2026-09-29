@@ -4,11 +4,9 @@ import { useSearchParams } from 'react-router-dom'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs'
 import { AttendanceLocationCard } from '@/features/tenant/AttendanceLocationCard'
 import { TenantSettingsCard } from '@/features/tenant/TenantSettingsCard'
-import { DisplayTokensCard } from '@/features/display/DisplayTokensCard'
 import { SetupProgressStrip } from '@/features/onboarding/SetupProgressStrip'
-import { useAuth } from '@/features/auth/useAuth'
 
-const TAB_VALUES = ['details', 'location', 'displays'] as const
+const TAB_VALUES = ['details', 'location'] as const
 type TabValue = (typeof TAB_VALUES)[number]
 
 function isTabValue(value: string | null): value is TabValue {
@@ -16,37 +14,21 @@ function isTabValue(value: string | null): value is TabValue {
 }
 
 /**
- * "How is this tenant configured?" (§24) — the three subsections a tenant
- * admin needs (organization details, the attendance location, the office
- * displays) live here as tabs rather than one long page, matching §19's
- * "logically separated" requirement. Each tab is the same feature-level
- * card `ProfilePage` used to render inline; nothing here duplicates their
- * data-fetching or mutation logic.
+ * "How is this tenant configured?" — organization details and the
+ * attendance location (which now carries its own static QR panel — see
+ * `AttendanceLocationCard`) live here as tabs rather than one long page.
  *
- * MANAGER also reaches this route (see `router.tsx`) because the backend's
- * `QR_ISSUER_ROLES` already lets a manager create/list/revoke display
- * tokens — but renaming the tenant or moving the attendance geofence are
- * genuinely admin-level decisions, so a manager sees the Displays content
- * directly, with no tab list and no path to the other two.
+ * TENANT_ADMIN only (see `router.tsx`): renaming the tenant, moving the
+ * attendance geofence and regenerating the location's QR are all
+ * admin-level decisions. A "Displays" tab existed here through Phase 11 for
+ * kiosk-credential management; it was removed along with the kiosk
+ * mechanism itself once the QR became a static, printed code with nothing
+ * left to provision.
  */
 export default function OrganizationPage() {
-  const { user } = useAuth()
-  const isTenantAdmin = user?.role === 'TENANT_ADMIN'
   const [searchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
-  // A "Generate display QR" shortcut elsewhere (e.g. `TeamHeadline`) can
-  // deep-link straight to the Displays tab via `?tab=displays`, instead of
-  // landing an admin on Details and making them click again.
   const initialTab: TabValue = isTabValue(requestedTab) ? requestedTab : 'details'
-
-  if (!isTenantAdmin) {
-    return (
-      <div className="flex max-w-3xl flex-col gap-6">
-        <h1 className="text-xl font-semibold text-foreground">Displays</h1>
-        <DisplayTokensCard />
-      </div>
-    )
-  }
 
   return (
     <div className="flex max-w-3xl flex-col gap-6">
@@ -56,7 +38,7 @@ export default function OrganizationPage() {
         </span>
         <div>
           <h1 className="text-xl font-semibold text-foreground">Organization</h1>
-          <p className="text-sm text-foreground-muted">Settings, attendance location, and office displays.</p>
+          <p className="text-sm text-foreground-muted">Settings and attendance location.</p>
         </div>
       </div>
 
@@ -66,7 +48,6 @@ export default function OrganizationPage() {
         <TabsList>
           <TabsTrigger value="details">Details</TabsTrigger>
           <TabsTrigger value="location">Attendance location</TabsTrigger>
-          <TabsTrigger value="displays">Displays</TabsTrigger>
         </TabsList>
 
         <TabsContent value="details">
@@ -75,10 +56,6 @@ export default function OrganizationPage() {
 
         <TabsContent value="location">
           <AttendanceLocationCard />
-        </TabsContent>
-
-        <TabsContent value="displays">
-          <DisplayTokensCard />
         </TabsContent>
       </Tabs>
     </div>

@@ -21,6 +21,7 @@ import {
   attendanceLocationSchema,
   type AttendanceLocationFormValues,
 } from '@/features/tenant/locationSchema'
+import { LocationQrPanel } from '@/features/tenant/LocationQrPanel'
 import { useCreateLocation, useUpdateLocation } from '@/features/tenant/useLocationMutations'
 import { useLocation } from '@/features/tenant/useLocation'
 import { GEOLOCATION_ERROR_MESSAGES, useGeolocation } from '@/hooks/useGeolocation'
@@ -31,22 +32,27 @@ export function AttendanceLocationCard() {
   const { data: location, isLoading, isError, error, refetch } = useLocation()
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Attendance location</CardTitle>
-        <CardDescription>
-          Employees must be within this radius, and scan the office display's QR code, to check in
-          or out.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {isLoading && <Skeleton className="h-11 w-full" />}
-        {isError && <ErrorState error={error} onRetry={() => void refetch()} />}
-        {!isLoading && !isError && (
-          <LocationForm existing={location ?? null} />
-        )}
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Attendance location</CardTitle>
+          <CardDescription>
+            Employees must be within this radius, and scan the location's QR code, to check in or out.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoading && <Skeleton className="h-11 w-full" />}
+          {isError && <ErrorState error={error} onRetry={() => void refetch()} />}
+          {!isLoading && !isError && (
+            <LocationForm existing={location ?? null} />
+          )}
+        </CardContent>
+      </Card>
+
+      {!isLoading && !isError && location && (
+        <LocationQrPanel qrToken={location.qr_token} locationName={location.name} />
+      )}
+    </div>
   )
 }
 
@@ -56,6 +62,8 @@ interface ExistingLocation {
   latitude: number
   longitude: number
   geofence_radius_meters: number
+  max_shift_hours: number
+  qr_token: string
 }
 
 function LocationForm({ existing }: { existing: ExistingLocation | null }) {
@@ -79,8 +87,16 @@ function LocationForm({ existing }: { existing: ExistingLocation | null }) {
           latitude: existing.latitude,
           longitude: existing.longitude,
           geofenceRadiusMeters: existing.geofence_radius_meters,
+          maxShiftHours: existing.max_shift_hours,
         }
-      : { name: '', description: '', latitude: 0, longitude: 0, geofenceRadiusMeters: 150 },
+      : {
+          name: '',
+          description: '',
+          latitude: 0,
+          longitude: 0,
+          geofenceRadiusMeters: 150,
+          maxShiftHours: 16,
+        },
   })
 
   // Fill the coordinate fields the instant a fix arrives — this form has no
@@ -104,6 +120,7 @@ function LocationForm({ existing }: { existing: ExistingLocation | null }) {
         latitude: existing.latitude,
         longitude: existing.longitude,
         geofenceRadiusMeters: existing.geofence_radius_meters,
+        maxShiftHours: existing.max_shift_hours,
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -118,6 +135,7 @@ function LocationForm({ existing }: { existing: ExistingLocation | null }) {
       latitude: values.latitude,
       longitude: values.longitude,
       geofence_radius_meters: values.geofenceRadiusMeters,
+      max_shift_hours: values.maxShiftHours,
     }
     try {
       await mutation.mutateAsync(payload)
@@ -183,6 +201,14 @@ function LocationForm({ existing }: { existing: ExistingLocation | null }) {
         type="number"
         error={errors.geofenceRadiusMeters?.message}
         {...register('geofenceRadiusMeters', { valueAsNumber: true })}
+      />
+
+      <Input
+        label="Auto-close a forgotten checkout after (hours)"
+        type="number"
+        hint="If someone stays checked in this long, Karya assumes they forgot to check out and closes it automatically. Raise this for staff with genuinely long shifts (on-call, overnight)."
+        error={errors.maxShiftHours?.message}
+        {...register('maxShiftHours', { valueAsNumber: true })}
       />
 
       <div>

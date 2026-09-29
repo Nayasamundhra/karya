@@ -366,85 +366,13 @@
         }
       }
     },
-    "/api/v1/presence/qr/challenge": {
-      "post": {
-        "tags": [
-          "presence"
-        ],
-        "summary": "Issue a short-lived QR challenge for the office display",
-        "description": "Mint a new dynamic QR challenge for the caller's own tenant.\n\nThe tenant and its attendance location are resolved from the authenticated\nuser, so a caller cannot issue a challenge for anyone else's site. The\nchallenge is single-use and expires after the configured TTL; the display is\nexpected to re-request one shortly before it lapses.",
-        "operationId": "create_qr_challenge_api_v1_presence_qr_challenge_post",
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/QRChallengeResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Insufficient permissions"
-          },
-          "409": {
-            "description": "No active attendance location is configured"
-          },
-          "429": {
-            "description": "Too many requests"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
-    "/api/v1/presence/qr/challenge/display": {
-      "post": {
-        "tags": [
-          "presence"
-        ],
-        "summary": "Issue a short-lived QR challenge, authenticated as a kiosk display",
-        "description": "The same challenge-issuance endpoint above, for an unattended kiosk.\n\nIdentical response shape and identical underlying service call - only the\ncaller's identity differs. A display token identifies one tenant's one\nphysical screen, never a person, so the issued challenge is audited with\nno actor rather than attributed to whichever admin happened to set the\nkiosk up.",
-        "operationId": "create_qr_challenge_for_display_api_v1_presence_qr_challenge_display_post",
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/QRChallengeResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not authenticated"
-          },
-          "409": {
-            "description": "No active attendance location is configured"
-          },
-          "429": {
-            "description": "Too many requests"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
     "/api/v1/presence/verify": {
       "post": {
         "tags": [
           "presence"
         ],
-        "summary": "Verify physical presence from GPS and QR evidence",
-        "description": "Evaluate GPS + QR evidence for the authenticated user.\n\nOpen to any authenticated, active user of the tenant - STAFF included, since\nproving one's own presence is the normal staff action.\n\nA rejection is returned as **200 with ``verified: false``**, not a 4xx: the\nrequest was well-formed and processed, and the body carries a structured\nverdict per signal. HTTP error codes are reserved for requests that could\nnot be processed at all (401 unauthenticated, 422 malformed evidence).\n\nThe commit persists the audit row and, on success, the QR consumption.",
+        "summary": "Verify physical presence from GPS and a static QR token",
+        "description": "Evaluate GPS + QR evidence for the authenticated user.\n\nOpen to any authenticated, active user of the tenant - STAFF included,\nsince proving one's own presence is the normal staff action.\n\nA rejection is returned as **200 with ``verified: false``**, not a 4xx:\nthe request was well-formed and processed, and the body carries a\nstructured verdict per signal. HTTP error codes are reserved for\nrequests that could not be processed at all (401 unauthenticated, 422\nmalformed evidence).\n\nThe commit persists the audit row written on a rejection; nothing is\nconsumed on success - the QR token is static and reusable by design.",
         "operationId": "verify_presence_api_v1_presence_verify_post",
         "requestBody": {
           "content": {
@@ -497,7 +425,7 @@
           "attendance"
         ],
         "summary": "Check in, after verifying presence",
-        "description": "Record a CHECK_IN for the authenticated user.\n\nPresence is verified here as part of the action - a prior call to\n``/presence/verify`` neither helps nor is trusted. The user must currently\nbe ``NOT_CHECKED_IN``; a duplicate attempt is refused with\n``ALREADY_CHECKED_IN`` and, deliberately, without consuming the QR\nchallenge.",
+        "description": "Record a CHECK_IN for the authenticated user.\n\nPresence is verified here as part of the action - a prior call to\n``/presence/verify`` neither helps nor is trusted. The user must currently\nbe ``NOT_CHECKED_IN``; a duplicate attempt is refused with\n``ALREADY_CHECKED_IN``.",
         "operationId": "check_in_api_v1_attendance_check_in_post",
         "requestBody": {
           "content": {
@@ -550,7 +478,7 @@
           "attendance"
         ],
         "summary": "Check out, after verifying presence",
-        "description": "Record a CHECK_OUT for the authenticated user.\n\nRequires a preceding CHECK_IN: without one the attempt is refused with\n``NOT_CHECKED_IN``. Needs its own fresh QR challenge, since the one that\nauthorised the check-in was consumed by it.",
+        "description": "Record a CHECK_OUT for the authenticated user.\n\nRequires a preceding CHECK_IN: without one the attempt is refused with\n``NOT_CHECKED_IN``.",
         "operationId": "check_out_api_v1_attendance_check_out_post",
         "requestBody": {
           "content": {
@@ -820,6 +748,39 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/attendance/team/hours": {
+      "get": {
+        "tags": [
+          "attendance"
+        ],
+        "summary": "Hours worked today/this week/this month across the caller's tenant",
+        "description": "Every active user's hours worked, computed fresh from events.\n\nSame tenant-viewer gate as ``/team/today``. See\n``app.services.attendance.queries.get_team_hours`` for exactly how an\nopen or auto-closed session is counted.",
+        "operationId": "read_team_hours_api_v1_attendance_team_hours_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamHoursResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/v1/attendance/users/{user_id}": {
@@ -1978,160 +1939,33 @@
         ]
       }
     },
-    "/api/v1/tenant/display-tokens": {
-      "get": {
+    "/api/v1/tenant/me/location/qr-token/regenerate": {
+      "post": {
         "tags": [
-          "display"
+          "tenant"
         ],
-        "summary": "List this tenant's office-display kiosks",
-        "description": "Never includes a raw token - only what was true at creation time plus\neach kiosk's revocation/heartbeat state, enough to decide which to revoke.",
-        "operationId": "list_display_tokens_api_v1_tenant_display_tokens_get",
+        "summary": "Regenerate the printed QR code for the caller's attendance location",
+        "description": "Mint a fresh QR token; the old printed code stops working immediately.\n\nTENANT_ADMIN only, same as creating/updating the location itself. This\nis the compensating control for a leaked or over-shared static QR - there\nis no rotation left to age a compromised code out on its own, so\ninvalidating it is a deliberate action instead.",
+        "operationId": "regenerate_location_qr_token_api_v1_tenant_me_location_qr_token_regenerate_post",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DisplayTokenListResponse"
+                  "$ref": "#/components/schemas/AttendanceLocationResponse"
                 }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      },
-      "post": {
-        "tags": [
-          "display"
-        ],
-        "summary": "Mint a credential for one office-display kiosk",
-        "description": "Mint a new kiosk credential. The raw token is returned exactly once.\n\nStore it in the kiosk's browser immediately - there is no way to\nretrieve it again, only to revoke it and mint a replacement.",
-        "operationId": "create_display_token_api_v1_tenant_display_tokens_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DisplayTokenCreateRequest"
               }
             }
           },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DisplayTokenCreateResponse"
-                }
-              }
-            }
+          "401": {
+            "description": "Not authenticated"
           },
           "403": {
             "description": "Insufficient permissions"
           },
-          "409": {
-            "description": "Set up your attendance location before creating a display"
-          },
-          "429": {
-            "description": "Too many requests"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
-    "/api/v1/tenant/display-tokens/{display_token_id}/revoke": {
-      "post": {
-        "tags": [
-          "display"
-        ],
-        "summary": "Revoke one office-display kiosk's credential",
-        "description": "Immediately and permanently disable one kiosk's credential.\n\n404, not 403, for a display token belonging to another tenant - the same\n\"cross-tenant lookups don't exist\" posture every other admin route uses.",
-        "operationId": "revoke_display_token_api_v1_tenant_display_tokens__display_token_id__revoke_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "display_token_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Display Token Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DisplayTokenResponse"
-                }
-              }
-            }
-          },
           "404": {
-            "description": "No such display token"
-          },
-          "429": {
-            "description": "Too many requests"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/display/revoke-self": {
-      "post": {
-        "tags": [
-          "display"
-        ],
-        "summary": "A kiosk revokes its own credential",
-        "description": "Let a kiosk disable itself - the \"Reset this display\" control.\n\nDeliberately narrow: a display token can revoke only the one row its own\ntoken identifies (`display.display_token_id`, derived from the token\nitself, never a request parameter - the same \"identity is derived, not\naccepted\" posture every tenant-scoped route already uses), so a leaked\ndisplay token gains no capability beyond killing itself. There is no\n\"un-revoke\" - a reset kiosk needs a freshly minted token from an admin,\nsame as any other revoked display.",
-        "operationId": "revoke_self_api_v1_display_revoke_self_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DisplayTokenResponse"
-                }
-              }
-            }
+            "description": "No attendance location is configured yet"
           },
           "429": {
             "description": "Too many requests"
@@ -2166,16 +2000,10 @@
             "minimum": 0.0,
             "title": "Accuracy Meters"
           },
-          "challenge_id": {
+          "qr_token": {
             "type": "string",
             "format": "uuid",
-            "title": "Challenge Id"
-          },
-          "nonce": {
-            "type": "string",
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Nonce"
+            "title": "Qr Token"
           }
         },
         "additionalProperties": false,
@@ -2184,11 +2012,10 @@
           "latitude",
           "longitude",
           "accuracy_meters",
-          "challenge_id",
-          "nonce"
+          "qr_token"
         ],
         "title": "AttendanceActionRequest",
-        "description": "Evidence for a check-in or check-out.\n\nIdentical to the presence contract: coordinates, accuracy, challenge id and\nnonce. Note what is *absent* - no user, no tenant, no timestamp, no event\ntype and no verdict. Those are all determined by the server, and inherited\n``extra=\"forbid\"`` turns an attempt to supply one into a 422 rather than a\nsilently ignored field."
+        "description": "Evidence for a check-in or check-out.\n\nIdentical to the presence contract: coordinates, accuracy and a QR\ntoken. Note what is *absent* - no user, no tenant, no timestamp, no event\ntype and no verdict. Those are all determined by the server, and inherited\n``extra=\"forbid\"`` turns an attempt to supply one into a 422 rather than a\nsilently ignored field."
       },
       "AttendanceActionResponse": {
         "properties": {
@@ -2246,6 +2073,11 @@
               }
             ],
             "title": "Reason"
+          },
+          "auto_closed_previous_session": {
+            "type": "boolean",
+            "title": "Auto Closed Previous Session",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -2369,13 +2201,13 @@
           "description": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 500
               },
               {
                 "type": "null"
               }
             ],
-            "maxLength": 500,
             "title": "Description"
           },
           "latitude": {
@@ -2396,6 +2228,13 @@
             "minimum": 10.0,
             "title": "Geofence Radius Meters",
             "default": 150
+          },
+          "max_shift_hours": {
+            "type": "integer",
+            "maximum": 72.0,
+            "minimum": 1.0,
+            "title": "Max Shift Hours",
+            "default": 16
           }
         },
         "additionalProperties": false,
@@ -2442,9 +2281,18 @@
             "type": "integer",
             "title": "Geofence Radius Meters"
           },
+          "max_shift_hours": {
+            "type": "integer",
+            "title": "Max Shift Hours"
+          },
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "qr_token": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Qr Token"
           },
           "created_at": {
             "type": "string",
@@ -2466,7 +2314,9 @@
           "latitude",
           "longitude",
           "geofence_radius_meters",
+          "max_shift_hours",
           "status",
+          "qr_token",
           "created_at",
           "updated_at"
         ],
@@ -2490,13 +2340,13 @@
           "description": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 500
               },
               {
                 "type": "null"
               }
             ],
-            "maxLength": 500,
             "title": "Description"
           },
           "latitude": {
@@ -2537,6 +2387,19 @@
               }
             ],
             "title": "Geofence Radius Meters"
+          },
+          "max_shift_hours": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 72.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Shift Hours"
           }
         },
         "additionalProperties": false,
@@ -2593,6 +2456,11 @@
               }
             ],
             "title": "Check Out Event Id"
+          },
+          "check_out_auto_closed": {
+            "type": "boolean",
+            "title": "Check Out Auto Closed",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -2643,124 +2511,6 @@
         "title": "DayStatus",
         "description": "How one calendar day looks for one user.\n\n``NO_RECORD`` is named carefully. It states only that **no attendance event\nwas recorded** for that day - it is *not* a claim that the person was absent\nfrom work. They may have been on leave, travelling, working elsewhere, or\nsimply unable to reach the QR display; Karya has no way to tell, and leave\nand shift management do not exist yet. \"ABSENT\" would assert something the\ndata does not support.\n\nDistinct from :class:`AttendanceState`, which is the *live* state machine\nPhase 4 uses to accept or refuse a check-in. This enum describes a completed\n(or in-progress) day and therefore needs the third ``COMPLETED`` value."
       },
-      "DisplayTokenCreateRequest": {
-        "properties": {
-          "label": {
-            "type": "string",
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Label"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "label"
-        ],
-        "title": "DisplayTokenCreateRequest"
-      },
-      "DisplayTokenCreateResponse": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "token": {
-            "type": "string",
-            "title": "Token"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "id",
-          "label",
-          "token",
-          "created_at"
-        ],
-        "title": "DisplayTokenCreateResponse",
-        "description": "Returned once, on creation. The raw token is never retrievable again."
-      },
-      "DisplayTokenListResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/DisplayTokenResponse"
-            },
-            "type": "array",
-            "title": "Items"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "items"
-        ],
-        "title": "DisplayTokenListResponse"
-      },
-      "DisplayTokenResponse": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "last_used_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Used At"
-          },
-          "revoked_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Revoked At"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "id",
-          "label",
-          "created_at",
-          "last_used_at",
-          "revoked_at"
-        ],
-        "title": "DisplayTokenResponse",
-        "description": "One row in the listing - never the raw token."
-      },
       "EmailVerificationRequest": {
         "properties": {
           "token": {
@@ -2786,12 +2536,7 @@
           "GPS_ACCURACY_TOO_LOW",
           "OUTSIDE_GEOFENCE",
           "QR_NOT_FOUND",
-          "QR_EXPIRED",
-          "QR_ALREADY_USED",
-          "QR_REVOKED",
-          "QR_NONCE_MISMATCH",
-          "QR_TENANT_MISMATCH",
-          "QR_LOCATION_MISMATCH"
+          "QR_TENANT_MISMATCH"
         ],
         "title": "FailureReason",
         "description": "Why a presence attempt was rejected.\n\nSome values are internal-only; see :data:`CLIENT_SAFE_REASON` for the\nmapping applied before a reason reaches an API response."
@@ -3001,16 +2746,10 @@
             "minimum": 0.0,
             "title": "Accuracy Meters"
           },
-          "challenge_id": {
+          "qr_token": {
             "type": "string",
             "format": "uuid",
-            "title": "Challenge Id"
-          },
-          "nonce": {
-            "type": "string",
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Nonce"
+            "title": "Qr Token"
           }
         },
         "additionalProperties": false,
@@ -3019,11 +2758,10 @@
           "latitude",
           "longitude",
           "accuracy_meters",
-          "challenge_id",
-          "nonce"
+          "qr_token"
         ],
         "title": "PresenceVerificationRequest",
-        "description": "Evidence submitted by a staff device.\n\nNote what is absent: no identity, no tenant, no verdict, no distance. All of\nthose are derived from the bearer token and the database."
+        "description": "Evidence submitted by a staff device.\n\nNote what is absent: no identity, no tenant, no verdict, no distance. All\nof those are derived from the bearer token and the database.\n``qr_token`` is the static value printed/displayed at the office - it\nnever expires and is the same on every scan, so nothing here needs a\nnonce or a challenge id any more."
       },
       "PresenceVerificationResponse": {
         "properties": {
@@ -3062,38 +2800,6 @@
         "title": "PresenceVerificationResponse",
         "description": "The presence decision returned to the caller."
       },
-      "QRChallengeResponse": {
-        "properties": {
-          "challenge_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Challenge Id"
-          },
-          "nonce": {
-            "type": "string",
-            "title": "Nonce"
-          },
-          "expires_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Expires At"
-          },
-          "expires_in": {
-            "type": "integer",
-            "title": "Expires In"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "challenge_id",
-          "nonce",
-          "expires_at",
-          "expires_in"
-        ],
-        "title": "QRChallengeResponse",
-        "description": "A freshly issued challenge, for the office display to render as a QR.\n\nThe display encodes ``challenge_id`` and ``nonce`` into the QR image; those\ntwo are all a phone needs to submit. Nothing else about the tenant, the\nlocation or its coordinates is included - the server stays authoritative and\nthe QR stays compact."
-      },
       "QRVerificationResult": {
         "properties": {
           "verified": {
@@ -3107,7 +2813,7 @@
           "verified"
         ],
         "title": "QRVerificationResult",
-        "description": "QR challenge outcome. Deliberately carries no nonce."
+        "description": "QR-token resolution outcome. Deliberately carries no location detail."
       },
       "RefreshTokenRequest": {
         "properties": {
@@ -3316,6 +3022,112 @@
         ],
         "title": "TeamAttendanceSummary",
         "description": "Headcount by status. The three buckets always sum to ``total_staff``."
+      },
+      "TeamHoursResponse": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "week_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Week Start"
+          },
+          "month_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Month Start"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/TeamHoursTotals"
+          },
+          "employees": {
+            "items": {
+              "$ref": "#/components/schemas/TeamMemberHoursResponse"
+            },
+            "type": "array",
+            "title": "Employees"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "date",
+          "week_start",
+          "month_start",
+          "summary",
+          "employees"
+        ],
+        "title": "TeamHoursResponse",
+        "description": "Hours worked across the caller's own tenant, as of the request.\n\nEvery figure here is computed fresh from ``attendance_events`` on this\nrequest - there is no stored total. A still-open check-in contributes\nelapsed time up to the moment of the request, so the numbers move on\ntheir own between requests without anything writing to them; a session\nthe forgotten-checkout safety net auto-closed contributes up to that\nsystem-generated checkout, same as a session the person closed\nthemselves."
+      },
+      "TeamHoursTotals": {
+        "properties": {
+          "total_today_hours": {
+            "type": "number",
+            "title": "Total Today Hours"
+          },
+          "total_week_hours": {
+            "type": "number",
+            "title": "Total Week Hours"
+          },
+          "total_month_hours": {
+            "type": "number",
+            "title": "Total Month Hours"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total_today_hours",
+          "total_week_hours",
+          "total_month_hours"
+        ],
+        "title": "TeamHoursTotals",
+        "description": "Team-wide totals - the sum of every employee's own figure below."
+      },
+      "TeamMemberHoursResponse": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "employee_code": {
+            "type": "string",
+            "title": "Employee Code"
+          },
+          "today_hours": {
+            "type": "number",
+            "title": "Today Hours"
+          },
+          "week_hours": {
+            "type": "number",
+            "title": "Week Hours"
+          },
+          "month_hours": {
+            "type": "number",
+            "title": "Month Hours"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "name",
+          "employee_code",
+          "today_hours",
+          "week_hours",
+          "month_hours"
+        ],
+        "title": "TeamMemberHoursResponse",
+        "description": "One colleague's hours worked, for the tenant dashboard."
       },
       "TenantOnboardingRequest": {
         "properties": {
@@ -3870,7 +3682,7 @@
     "securitySchemes": {
       "HTTPBearer": {
         "type": "http",
-        "description": "Display token (kiosk credential)",
+        "description": "JWT access token",
         "scheme": "bearer"
       }
     }

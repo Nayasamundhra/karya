@@ -1,4 +1,4 @@
-import { MapPin, MonitorSmartphone, Users } from 'lucide-react'
+import { MapPin, QrCode, Users } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { CreateOrganizationForm } from '@/features/onboarding/CreateOrganizationForm'
@@ -15,9 +15,9 @@ const FEATURES = [
     description: "See who's in, right now — not tomorrow's report.",
   },
   {
-    icon: MonitorSmartphone,
-    title: 'Walk-up kiosk displays',
-    description: 'One shared QR screen at the door — no phone required.',
+    icon: QrCode,
+    title: 'One printed QR code',
+    description: 'Stick it on the wall. No kiosk hardware, no screen to manage.',
   },
 ]
 

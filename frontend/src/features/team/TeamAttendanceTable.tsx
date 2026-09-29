@@ -13,6 +13,7 @@ import { Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent } from '@/components/ui/Card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/Table'
@@ -28,6 +29,14 @@ function AvatarChip({ name }: { name: string }) {
       {name.slice(0, 1).toUpperCase()}
     </span>
   )
+}
+
+/** True when today's last checkout was written by the system, not the
+ * person themselves — see `AttendanceSessionResponse.check_out_auto_closed`
+ * and `attendance_locations.max_shift_hours` on the backend. A manager
+ * should notice this, not read it as an ordinary day. */
+function hasAutoClosedSession(employee: TeamAttendanceMember): boolean {
+  return (employee.sessions ?? []).some((session) => session.check_out_auto_closed)
 }
 
 type StatusFilter = 'ALL' | DayStatus
@@ -99,7 +108,7 @@ export function TeamAttendanceTable({ employees }: { employees: TeamAttendanceMe
         <>
           {/* Desktop table */}
           <div className="hidden md:block">
-            <Table>
+            <Table aria-label="Today's attendance">
               <TableHeader>
                 <TableRow>
                   <TableHead>Employee</TableHead>
@@ -136,7 +145,12 @@ export function TeamAttendanceTable({ employees }: { employees: TeamAttendanceMe
                       <EmployeeStatusBadge status={employee.status} />
                     </TableCell>
                     <TableCell>{employee.check_in ? formatTime(employee.check_in) : '—'}</TableCell>
-                    <TableCell>{employee.check_out ? formatTime(employee.check_out) : '—'}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <span>{employee.check_out ? formatTime(employee.check_out) : '—'}</span>
+                        {hasAutoClosedSession(employee) && <Badge variant="warning">Auto-closed</Badge>}
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -173,9 +187,12 @@ export function TeamAttendanceTable({ employees }: { employees: TeamAttendanceMe
                       </div>
                       <EmployeeStatusBadge status={employee.status} />
                     </div>
-                    <p className="text-xs text-foreground-muted">
-                      In {employee.check_in ? formatTime(employee.check_in) : '—'} · Out{' '}
-                      {employee.check_out ? formatTime(employee.check_out) : '—'}
+                    <p className="flex flex-wrap items-center gap-2 text-xs text-foreground-muted">
+                      <span>
+                        In {employee.check_in ? formatTime(employee.check_in) : '—'} · Out{' '}
+                        {employee.check_out ? formatTime(employee.check_out) : '—'}
+                      </span>
+                      {hasAutoClosedSession(employee) && <Badge variant="warning">Auto-closed</Badge>}
                     </p>
                   </CardContent>
                 </Card>

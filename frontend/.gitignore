@@ -29,3 +29,6 @@ test-results
 *.sw?
 
 .vercel
+
+# Superdesign scratch HTML (component-extraction intermediates) — never committed
+.superdesign/tmp/

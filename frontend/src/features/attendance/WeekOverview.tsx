@@ -15,6 +15,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { useAttendanceHistory } from '@/features/attendance/useAttendanceHistory'
+import { formatHours } from '@/features/attendance/formatters'
 import type { AttendanceDayResponse, AttendanceSessionResponse, AttendanceTodayResponse } from '@/lib/api/types'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -51,14 +52,6 @@ function dayHoursLive(today: AttendanceTodayResponse): number {
 
   const liveHours = (Date.now() - new Date(openStart).getTime()) / (1000 * 60 * 60)
   return closed + Math.max(0, liveHours)
-}
-
-function formatHours(hours: number): string {
-  const wholeMinutes = Math.round(hours * 60)
-  const h = Math.floor(wholeMinutes / 60)
-  const m = wholeMinutes % 60
-  if (h === 0) return `${m}m`
-  return m === 0 ? `${h}h` : `${h}h ${m}m`
 }
 
 /** Consecutive days with a real attendance record, most recent first,

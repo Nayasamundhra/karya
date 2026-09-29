@@ -1,10 +1,5 @@
 import { apiFetch } from '@/lib/api/client'
-import type { PresenceVerificationRequest, PresenceVerificationResponse, QRChallengeResponse } from '@/lib/api/types'
-
-/** MANAGER / TENANT_ADMIN only — the backend, not this check, is what enforces that. */
-export function createQrChallenge(signal?: AbortSignal): Promise<QRChallengeResponse> {
-  return apiFetch<QRChallengeResponse>('/api/v1/presence/qr/challenge', { method: 'POST', signal })
-}
+import type { PresenceVerificationRequest, PresenceVerificationResponse } from '@/lib/api/types'
 
 /**
  * Verify GPS + QR evidence for the current user. A rejection is a normal

@@ -1,9 +1,9 @@
 /**
  * The employee home's reason for existing: check in/out is the page, not a
  * link off of it (see the redesign plan's diagnosis of the old HomePage).
- * This is the one place — alongside the kiosk display — the gradient
- * "spotlight" surface is allowed to appear (`styles/index.css`'s
- * `--color-spotlight-*`); everywhere else color stays restrained.
+ * This is the one place the gradient "spotlight" surface is allowed to
+ * appear (`styles/index.css`'s `--color-spotlight-*`); everywhere else
+ * color stays restrained.
  *
  * Still reads today's state from the backend's own `AttendanceTodayResponse`
  * exactly like `AttendanceStatusCard` does — no verdict is computed here,
@@ -11,12 +11,19 @@
  * clock (`useElapsedTime`) that is pure display arithmetic on a timestamp
  * the backend already returned.
  */
-import { LogIn, LogOut } from 'lucide-react'
+import { AlertTriangle, LogIn, LogOut } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { formatTime } from '@/features/attendance/formatters'
 import { useElapsedTime } from '@/features/attendance/useElapsedTime'
 import type { AttendanceTodayResponse } from '@/lib/api/types'
+
+// A UI-only nicety, not an enforcement point: the real cutoff
+// (`attendance_locations.max_shift_hours`, set per tenant) lives on the
+// backend and this value is deliberately far below even the smallest
+// reasonable one, so this warning appears well before any auto-close
+// would happen - a nudge, never a prediction of one.
+const LONG_SESSION_WARNING_HOURS = 10
 
 export function CheckInHero({ today }: { today: AttendanceTodayResponse }) {
   const { day, state } = today
@@ -24,6 +31,8 @@ export function CheckInHero({ today }: { today: AttendanceTodayResponse }) {
 
   const checkedIn = state === 'CHECKED_IN'
   const completedToday = !checkedIn && day.status === 'COMPLETED'
+  const elapsedHours = checkedIn && day.first_check_in ? hoursSince(day.first_check_in) : 0
+  const isLongSession = checkedIn && elapsedHours >= LONG_SESSION_WARNING_HOURS
 
   return (
     <div
@@ -57,6 +66,13 @@ export function CheckInHero({ today }: { today: AttendanceTodayResponse }) {
         )}
 
         <p className="mt-2.5 text-sm text-white/85 sm:text-base">{subtext(today)}</p>
+
+        {isLongSession && (
+          <p className="mt-2 flex items-center gap-1.5 text-sm font-medium text-white">
+            <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+            Still checked in from earlier — forgot to check out?
+          </p>
+        )}
       </div>
 
       <Link
@@ -77,6 +93,10 @@ export function CheckInHero({ today }: { today: AttendanceTodayResponse }) {
       </Link>
     </div>
   )
+}
+
+function hoursSince(isoTimestamp: string): number {
+  return (Date.now() - new Date(isoTimestamp).getTime()) / (1000 * 60 * 60)
 }
 
 function subtext(today: AttendanceTodayResponse): string {

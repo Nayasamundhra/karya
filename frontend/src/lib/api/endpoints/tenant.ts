@@ -40,3 +40,14 @@ export function updateOwnLocation(
     body: payload,
   })
 }
+
+/**
+ * TENANT_ADMIN only. Mints a fresh `qr_token` — the old printed code stops
+ * resolving the instant this returns. The only lever against a leaked or
+ * over-shared QR now that it no longer expires on its own.
+ */
+export function regenerateLocationQrToken(): Promise<AttendanceLocationResponse> {
+  return apiFetch<AttendanceLocationResponse>('/api/v1/tenant/me/location/qr-token/regenerate', {
+    method: 'POST',
+  })
+}

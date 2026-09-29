@@ -8,6 +8,7 @@ import type { HistoryQuery } from '@/lib/api/endpoints/attendance'
 export const teamKeys = {
   all: ['team'] as const,
   today: (day?: string) => [...teamKeys.all, 'today', day ?? 'current'] as const,
+  hours: () => [...teamKeys.all, 'hours'] as const,
   member: (userId: string, day?: string) => [...teamKeys.all, 'member', userId, day ?? 'current'] as const,
   memberHistory: (userId: string, params: HistoryQuery = {}) =>
     [...teamKeys.all, 'member', userId, 'history', params] as const,

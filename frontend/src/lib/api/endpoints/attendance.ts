@@ -12,6 +12,7 @@ import type {
   AttendanceHistoryResponse,
   AttendanceTodayResponse,
   TeamAttendanceResponse,
+  TeamHoursResponse,
 } from '@/lib/api/types'
 
 export function checkIn(payload: AttendanceActionRequest): Promise<AttendanceActionResponse> {
@@ -43,6 +44,13 @@ export function getMyHistory(params: HistoryQuery = {}, signal?: AbortSignal): P
 /** MANAGER / TENANT_ADMIN only. */
 export function getTeamToday(day?: string, signal?: AbortSignal): Promise<TeamAttendanceResponse> {
   return apiFetch<TeamAttendanceResponse>('/api/v1/attendance/team/today', { query: { day }, signal })
+}
+
+/** MANAGER / TENANT_ADMIN only. Hours worked today/this week/this month,
+ * computed fresh on every call — an open session's total grows on its own
+ * between requests, nothing here is cached. */
+export function getTeamHours(signal?: AbortSignal): Promise<TeamHoursResponse> {
+  return apiFetch<TeamHoursResponse>('/api/v1/attendance/team/hours', { signal })
 }
 
 /** MANAGER / TENANT_ADMIN only. Cross-tenant or unknown ids both 404. */

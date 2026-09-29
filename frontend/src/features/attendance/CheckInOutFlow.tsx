@@ -92,8 +92,7 @@ export function CheckInOutFlow({ eventType }: CheckInOutFlowProps) {
         latitude: coords.latitude,
         longitude: coords.longitude,
         accuracy_meters: coords.accuracy,
-        challenge_id: payload.challenge_id,
-        nonce: payload.nonce,
+        qr_token: payload.qr_token,
       }
       try {
         const response = await mutation.mutateAsync(request)
@@ -298,6 +297,12 @@ function ResultCard({
               <p className="mt-1 text-sm font-medium text-foreground">{formatTimestamp(response.event_timestamp)}</p>
             )}
           </div>
+          {outcome.autoClosedPreviousSession && (
+            <Alert variant="warning" title="Previous shift closed automatically" className="w-full text-left">
+              You were still checked in from an earlier shift, so it was closed automatically before this one
+              started.
+            </Alert>
+          )}
           <Button size="lg" className="w-full" onClick={onDone}>
             Done
           </Button>

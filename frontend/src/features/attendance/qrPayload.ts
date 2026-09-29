@@ -1,21 +1,19 @@
 /**
- * Parses the text decoded off the office QR into the two fields the backend
- * accepts. Per `backend/README.md` §"Presence verification protocol", the
- * display encodes exactly `{"challenge_id": "...", "nonce": "..."}` as JSON
- * — nothing else.
+ * Parses the text decoded off the office QR into the one field the backend
+ * accepts. The QR is now **static** — printed or displayed once per
+ * attendance location, never rotated — and encodes exactly
+ * `{"qr_token": "..."}` as JSON, nothing else.
  *
  * This is a **format** check only, not a trust boundary: a well-formed
- * `{challenge_id, nonce}` pair that is expired, already used, or from
- * another tenant is still rejected — by the backend, on submission (§4: "do
- * not trust anything inside the QR"). This module exists solely to turn
+ * `{qr_token}` that doesn't resolve to this tenant's location is still
+ * rejected by the backend on submission. This module exists solely to turn
  * "not even shaped like a Karya QR code" into a clear, immediate message
  * instead of a confusing 422 round-trip.
  */
 import { z } from 'zod'
 
 const qrPayloadSchema = z.object({
-  challenge_id: z.string().uuid(),
-  nonce: z.string().min(1),
+  qr_token: z.string().uuid(),
 })
 
 export type QrPayload = z.infer<typeof qrPayloadSchema>

@@ -40,6 +40,7 @@ describe('AttendanceLocationCard', () => {
     useAuthStore.getState().clearSession()
     vi.mocked(tenantApi.getOwnLocation).mockReset()
     vi.mocked(tenantApi.createOwnLocation).mockReset()
+    vi.mocked(tenantApi.regenerateLocationQrToken).mockReset()
   })
 
   it('shows a create form — not an error state — when none exists yet (404)', async () => {
@@ -65,7 +66,9 @@ describe('AttendanceLocationCard', () => {
       latitude: 12.9716,
       longitude: 77.5946,
       geofence_radius_meters: 150,
+      max_shift_hours: 16,
       status: 'ACTIVE',
+      qr_token: '11111111-1111-1111-1111-111111111111',
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
     })
@@ -98,7 +101,9 @@ describe('AttendanceLocationCard', () => {
       latitude: 12.9716,
       longitude: 77.5946,
       geofence_radius_meters: 150,
+      max_shift_hours: 16,
       status: 'ACTIVE',
+      qr_token: '11111111-1111-1111-1111-111111111111',
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
     })
@@ -117,6 +122,7 @@ describe('AttendanceLocationCard', () => {
       latitude: 12.9716,
       longitude: 77.5946,
       geofence_radius_meters: 150,
+      max_shift_hours: 16,
     })
   })
 
@@ -132,7 +138,9 @@ describe('AttendanceLocationCard', () => {
       latitude: 12.9716,
       longitude: 77.5946,
       geofence_radius_meters: 150,
+      max_shift_hours: 16,
       status: 'ACTIVE',
+      qr_token: '11111111-1111-1111-1111-111111111111',
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
     })
@@ -149,5 +157,63 @@ describe('AttendanceLocationCard', () => {
     expect(tenantApi.createOwnLocation).toHaveBeenCalledWith(
       expect.objectContaining({ description: '3rd floor, Brigade Towers' }),
     )
+  })
+
+  it('shows the static QR panel with a regenerate action once a location exists', async () => {
+    signIn()
+    vi.mocked(tenantApi.getOwnLocation).mockResolvedValue({
+      id: 'loc-1',
+      name: 'Head Office',
+      description: null,
+      latitude: 12.9716,
+      longitude: 77.5946,
+      geofence_radius_meters: 150,
+      max_shift_hours: 16,
+      status: 'ACTIVE',
+      qr_token: '11111111-1111-1111-1111-111111111111',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    })
+    renderCard()
+
+    expect(await screen.findByText(/attendance qr code/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /regenerate code/i })).toBeInTheDocument()
+  })
+
+  it('regenerates the QR token after confirming, and replaces the cached location', async () => {
+    signIn()
+    vi.mocked(tenantApi.getOwnLocation).mockResolvedValue({
+      id: 'loc-1',
+      name: 'Head Office',
+      description: null,
+      latitude: 12.9716,
+      longitude: 77.5946,
+      geofence_radius_meters: 150,
+      max_shift_hours: 16,
+      status: 'ACTIVE',
+      qr_token: '11111111-1111-1111-1111-111111111111',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    })
+    vi.mocked(tenantApi.regenerateLocationQrToken).mockResolvedValue({
+      id: 'loc-1',
+      name: 'Head Office',
+      description: null,
+      latitude: 12.9716,
+      longitude: 77.5946,
+      geofence_radius_meters: 150,
+      max_shift_hours: 16,
+      status: 'ACTIVE',
+      qr_token: '22222222-2222-2222-2222-222222222222',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    })
+    renderCard()
+    await screen.findByText(/attendance qr code/i)
+
+    await userEvent.click(screen.getByRole('button', { name: /regenerate code/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^regenerate$/i }))
+
+    expect(tenantApi.regenerateLocationQrToken).toHaveBeenCalledTimes(1)
   })
 })

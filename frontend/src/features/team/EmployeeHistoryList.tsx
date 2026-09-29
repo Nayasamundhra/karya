@@ -8,6 +8,7 @@
 import { useState } from 'react'
 import { CalendarX2 } from 'lucide-react'
 
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent } from '@/components/ui/Card'
 import { EmptyState } from '@/components/feedback/EmptyState'
@@ -86,12 +87,17 @@ export function EmployeeHistoryList({ userId }: { userId: string }) {
 }
 
 function DayRow({ day }: { day: AttendanceDayResponse }) {
+  const hasAutoClosedSession = (day.sessions ?? []).some((session) => session.check_out_auto_closed)
+
   return (
     <Card>
       <CardContent className="flex items-center justify-between gap-3 p-4">
         <div>
           <p className="text-sm font-medium text-foreground">{formatDay(day.date)}</p>
-          <p className="text-xs text-foreground-muted">{sessionsSummary(day)}</p>
+          <p className="flex flex-wrap items-center gap-2 text-xs text-foreground-muted">
+            <span>{sessionsSummary(day)}</span>
+            {hasAutoClosedSession && <Badge variant="warning">Auto-closed</Badge>}
+          </p>
         </div>
         <EmployeeStatusBadge status={day.status} />
       </CardContent>

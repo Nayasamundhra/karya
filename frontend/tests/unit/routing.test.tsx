@@ -32,11 +32,7 @@ vi.mock('@/lib/api/endpoints/tenant', async (importOriginal) => {
   }
 })
 
-// `SetupProgressStrip` also reads these two, same reasoning as above.
-vi.mock('@/lib/api/endpoints/display', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/api/endpoints/display')>()),
-  listDisplayTokens: vi.fn().mockResolvedValue({ items: [] }),
-}))
+// `SetupProgressStrip` also reads this, same reasoning as above.
 vi.mock('@/lib/api/endpoints/users', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api/endpoints/users')>()),
   listUsers: vi.fn().mockResolvedValue({
@@ -204,28 +200,17 @@ describe('routing and role-based access', () => {
     signInAs('TENANT_ADMIN')
     renderAt('/admin/organization')
     expect(await screen.findByRole('heading', { name: /^organization$/i, level: 1 })).toBeInTheDocument()
-    // Drains SetupProgressStrip's location/display/employee queries within
-    // this test's own act() boundary (see the STAFF-at-`/` tests above).
+    // Drains SetupProgressStrip's location/employee queries within this
+    // test's own act() boundary (see the STAFF-at-`/` tests above).
     await screen.findByText(/^setup ·/i)
   })
 
-  it('lets MANAGER reach the organization route, narrowed to just Displays', async () => {
-    // MANAGER is one of the backend's QR_ISSUER_ROLES — it may manage
-    // display tokens exactly like TENANT_ADMIN, so it reaches this route
-    // too, just without the Details/Location tabs (`OrganizationPage`).
+  it('blocks MANAGER from the organization route — it is TENANT_ADMIN-only now', async () => {
+    // The only reason MANAGER ever reached this route was Phase 11's kiosk
+    // display-token management; once the QR became static, that reason
+    // disappeared and the route narrowed to TENANT_ADMIN alone.
     signInAs('MANAGER')
     renderAt('/admin/organization')
-    expect(await screen.findByRole('heading', { name: /^displays$/i, level: 1 })).toBeInTheDocument()
-    // Drains DisplayTokensCard's own location/display-list queries within
-    // this test's own act() boundary (see the STAFF-at-`/` tests above).
-    await screen.findByText(/set up an attendance location first/i)
-  })
-
-  it('renders the office-display kiosk with no login and no app shell', async () => {
-    useAuthStore.setState({ status: 'unauthenticated', user: null, accessToken: null, accessTokenExpiresAt: null })
-    renderAt('/display')
-    expect(await screen.findByRole('heading', { name: /set up this display/i })).toBeInTheDocument()
-    // Standalone: none of the authenticated shell's navigation renders here.
-    expect(screen.queryAllByRole('navigation', { name: 'Primary' })).toHaveLength(0)
+    expect(await screen.findByRole('heading', { name: /don't have permission/i })).toBeInTheDocument()
   })
 })

@@ -4,20 +4,19 @@
  * sense. Kept as a pure function so `CheckInOutFlow`'s branching is testable
  * without rendering anything.
  *
- * The retry rule follows directly from the backend's own ordering
- * (`app/services/presence/service.py::verify_presence`): the QR challenge is
- * consumed **only after** GPS has already passed, so a GPS-side refusal
- * (or a thrown network/server error, which by definition means the request
- * never got far enough to commit anything) leaves the same QR still valid —
- * retrying just needs a fresh location fix, not a re-scan. A QR-side
- * refusal means the code itself is the problem, so only a re-scan helps.
+ * The QR is static now — it never expires and is never "used up" — so the
+ * only QR-side refusal a client can still see is `QR_NOT_FOUND`, meaning the
+ * scanned code doesn't belong to this tenant's location at all (the wrong
+ * poster, most likely). That is the one case where re-scanning actually
+ * helps; every other refusal (GPS, or a thrown network/server error) just
+ * needs a fresh location fix against the same QR.
  */
 import { describeError } from '@/lib/errors/describeError'
 import { isApiError } from '@/lib/api/errors'
 import { describeRefusalReason } from '@/features/attendance/reasonMessages'
 import type { AttendanceActionResponse } from '@/lib/api/types'
 
-const QR_REASONS = new Set(['QR_EXPIRED', 'QR_ALREADY_USED', 'QR_NOT_FOUND', 'QR_REVOKED', 'QR_NONCE_MISMATCH'])
+const QR_REASONS = new Set(['QR_NOT_FOUND'])
 const STATE_REASONS = new Set(['ALREADY_CHECKED_IN', 'NOT_CHECKED_IN'])
 
 export type RetryTarget = 'scan' | 'gps' | null
@@ -27,6 +26,10 @@ export interface AttendanceOutcome {
   title: string
   message: string
   retryTarget: RetryTarget
+  /** True when this action first found the previous shift still open past
+   * the configured cutoff and closed it automatically before doing
+   * anything else — worth telling the person, not just acting on silently. */
+  autoClosedPreviousSession?: boolean
 }
 
 /** `settledResult` is either the resolved `AttendanceActionResponse` (which
@@ -35,7 +38,13 @@ export interface AttendanceOutcome {
 export function resolveOutcome(settledResult: AttendanceActionResponse | unknown): AttendanceOutcome {
   if (isAttendanceActionResponse(settledResult)) {
     if (settledResult.success) {
-      return { status: 'success', title: 'Success', message: '', retryTarget: null }
+      return {
+        status: 'success',
+        title: 'Success',
+        message: '',
+        retryTarget: null,
+        autoClosedPreviousSession: settledResult.auto_closed_previous_session,
+      }
     }
     const reason = settledResult.reason ?? null
     const retryTarget: RetryTarget = reason && QR_REASONS.has(reason) ? 'scan' : reason && STATE_REASONS.has(reason) ? null : 'gps'

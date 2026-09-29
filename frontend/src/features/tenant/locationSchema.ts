@@ -6,6 +6,8 @@ import { LOCATION_DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH } from '@/lib/validati
 // loose guardrails against a fat-fingered value, not a product opinion.
 const MIN_RADIUS_METERS = 10
 const MAX_RADIUS_METERS = 5_000
+const MIN_SHIFT_HOURS = 1
+const MAX_SHIFT_HOURS = 72
 
 // Plain `z.number()`, not `z.coerce.number()`: the inputs below use
 // react-hook-form's own `valueAsNumber` to deliver a real number to the
@@ -28,6 +30,14 @@ export const attendanceLocationSchema = z.object({
     .int('Must be a whole number')
     .min(MIN_RADIUS_METERS, `Must be at least ${MIN_RADIUS_METERS}m`)
     .max(MAX_RADIUS_METERS, `Must be at most ${MAX_RADIUS_METERS}m`),
+  // How many hours a check-in may sit open before Karya auto-closes it as a
+  // forgotten checkout — per location, since a 9-to-5 office and 24h
+  // on-call staff need genuinely different numbers.
+  maxShiftHours: z
+    .number()
+    .int('Must be a whole number')
+    .min(MIN_SHIFT_HOURS, `Must be at least ${MIN_SHIFT_HOURS} hour`)
+    .max(MAX_SHIFT_HOURS, `Must be at most ${MAX_SHIFT_HOURS} hours`),
 })
 
 export type AttendanceLocationFormValues = z.infer<typeof attendanceLocationSchema>

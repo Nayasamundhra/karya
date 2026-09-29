@@ -12,8 +12,8 @@ import { stubCameraUnavailable, stubCameraWithQrPayload } from './helpers/fakeCa
  * so the app's real QR-decode and attendance logic runs unmodified in both.
  */
 
-const CHALLENGE_ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6'
-const QR_PAYLOAD = { challenge_id: CHALLENGE_ID, nonce: 'office-display-nonce' }
+const QR_TOKEN = '3fa85f64-5717-4562-b3fc-2c963f66afa6'
+const QR_PAYLOAD = { qr_token: QR_TOKEN }
 
 async function mockAuth(page: import('@playwright/test').Page) {
   await page.route('**/api/v1/auth/login', async (route) => {
@@ -144,7 +144,7 @@ test.describe('check-in flow', () => {
     await page.route('**/api/v1/attendance/check-in', async (route) => {
       checkInCalled = true
       const body = route.request().postDataJSON()
-      expect(body).toMatchObject({ challenge_id: CHALLENGE_ID, nonce: 'office-display-nonce' })
+      expect(body).toMatchObject({ qr_token: QR_TOKEN })
       expect(body).not.toHaveProperty('tenant_id')
       expect(body).not.toHaveProperty('user_id')
       await route.fulfill({
@@ -172,7 +172,7 @@ test.describe('check-in flow', () => {
     await expect(page.getByText("You're checked in.")).toBeVisible()
   })
 
-  test('an expired QR is reported clearly and offers a re-scan', async ({ page }) => {
+  test('an unrecognized QR is reported clearly and offers a re-scan', async ({ page }) => {
     await stubCameraWithQrPayload(page, QR_PAYLOAD)
     await mockToday(page, todayResponse('NO_RECORD'))
     await mockHistory(page)
@@ -187,7 +187,7 @@ test.describe('check-in flow', () => {
           attendance_event_id: null,
           event_timestamp: null,
           presence: null,
-          reason: 'QR_EXPIRED',
+          reason: 'QR_NOT_FOUND',
         }),
       })
     })
@@ -197,7 +197,7 @@ test.describe('check-in flow', () => {
     await page.getByRole('link', { name: /check in/i }).first().click()
     await page.getByRole('button', { name: /start check-in/i }).click()
 
-    await expect(page.getByText(/this qr code has expired/i)).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText(/isn't valid here/i)).toBeVisible({ timeout: 15_000 })
     await expect(page.getByRole('button', { name: /scan again/i })).toBeVisible()
   })
 

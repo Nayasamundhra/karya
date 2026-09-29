@@ -13,6 +13,7 @@ function successResponse(overrides: Partial<AttendanceActionResponse> = {}): Att
     event_timestamp: '2026-08-22T09:04:00Z',
     presence: null,
     reason: null,
+    auto_closed_previous_session: false,
     ...overrides,
   }
 }
@@ -26,6 +27,7 @@ function refusal(reason: string): AttendanceActionResponse {
     event_timestamp: null,
     presence: null,
     reason,
+    auto_closed_previous_session: false,
   }
 }
 
@@ -37,12 +39,12 @@ describe('resolveOutcome', () => {
   })
 
   it('sends a QR-side refusal back to scanning, since the QR itself is the problem', () => {
-    for (const reason of ['QR_EXPIRED', 'QR_ALREADY_USED', 'QR_NOT_FOUND', 'QR_REVOKED', 'QR_NONCE_MISMATCH']) {
+    for (const reason of ['QR_NOT_FOUND']) {
       expect(resolveOutcome(refusal(reason)).retryTarget).toBe('scan')
     }
   })
 
-  it('sends a GPS-side refusal back to the GPS stage — the QR was never consumed, per the backend\'s own ordering', () => {
+  it('sends a GPS-side refusal back to the GPS stage — the (static, reusable) QR is never the problem there', () => {
     for (const reason of ['OUTSIDE_GEOFENCE', 'GPS_ACCURACY_TOO_LOW', 'GPS_INVALID', 'NO_ACTIVE_ATTENDANCE_LOCATION']) {
       expect(resolveOutcome(refusal(reason)).retryTarget).toBe('gps')
     }
