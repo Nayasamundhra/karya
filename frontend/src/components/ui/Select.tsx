@@ -15,7 +15,7 @@ export const SelectTrigger = forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      'flex min-h-11 w-full items-center justify-between gap-2 rounded-md border border-border-strong bg-surface px-3 text-sm text-foreground',
+      'flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-border-strong bg-surface-raised px-3.5 text-sm text-foreground',
       'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
       'disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-foreground-muted',
       className,
@@ -39,7 +39,7 @@ export const SelectContent = forwardRef<
       ref={ref}
       position={position}
       className={cn(
-        'z-50 max-h-80 min-w-32 overflow-hidden rounded-md border border-border bg-surface-raised shadow-md',
+        'z-50 max-h-80 min-w-32 overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-md',
         className,
       )}
       {...props}

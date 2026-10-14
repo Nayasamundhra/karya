@@ -1,3 +1,4 @@
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { ErrorState } from '@/components/feedback/ErrorState'
@@ -11,7 +12,7 @@ export default function ProfilePage() {
 
   return (
     <div className="flex max-w-2xl flex-col gap-6">
-      <h1 className="text-xl font-semibold text-foreground">Profile</h1>
+      <PageHeader eyebrow="Account" title="Profile" />
 
       {isLoading && (
         <Card>

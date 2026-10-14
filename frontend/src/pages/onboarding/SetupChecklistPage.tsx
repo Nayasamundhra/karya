@@ -1,3 +1,4 @@
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Check, MapPin, PartyPopper, Users } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -28,15 +29,11 @@ export default function SetupChecklistPage() {
 
   return (
     <div className="flex max-w-2xl flex-col gap-6">
-      <div>
-        <div className="text-xs font-semibold uppercase tracking-widest text-admin-600">Welcome to Karya</div>
-        <h1 className="mt-1 font-[family-name:var(--font-display)] text-2xl font-semibold text-foreground sm:text-3xl">
-          Let's finish setting up{user ? `, ${user.name}` : ''}
-        </h1>
-        <p className="mt-1.5 text-sm text-foreground-muted">
-          Two steps, and your team can start checking in. You can always come back to this from Home.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Welcome to Karya"
+        title={`Let's finish setting up${user ? `, ${user.name}` : ''}`}
+        description="Two steps, and your team can start checking in. You can always come back to this from Home."
+      />
 
       {!isLoading && (
         <div className="flex items-center gap-3">

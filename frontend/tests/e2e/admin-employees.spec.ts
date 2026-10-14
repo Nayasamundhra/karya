@@ -77,8 +77,8 @@ async function login(page: import('@playwright/test').Page) {
   await page.goto('/login')
   await page.getByLabel('Organization ID').fill('acme')
   await page.getByLabel('Email').fill('neha@acme.com')
-  await page.getByLabel('Password').fill('correct-password-123')
-  await page.getByRole('button', { name: 'Sign in' }).click()
+  await page.getByLabel('Password', { exact: true }).fill('correct-password-123')
+  await page.getByRole('button', { name: 'Log in' }).click()
 }
 
 test.describe('tenant admin employee management', () => {
@@ -132,7 +132,7 @@ test.describe('tenant admin employee management', () => {
     await page.getByLabel('Name').fill('New Hire')
     await page.getByLabel('Email').fill('new.hire@acme.com')
     await page.getByLabel('Employee code').fill('EMP-9')
-    await page.getByLabel('Password').fill('a-strong-password')
+    await page.getByLabel('Password', { exact: true }).fill('a-strong-password')
     await page.getByRole('button', { name: /^create employee$/i }).click()
 
     await expect(page.getByRole('heading', { name: 'Add employee' })).toHaveCount(0)
@@ -175,5 +175,43 @@ test.describe('tenant admin employee management', () => {
 
     await expect(page.getByRole('heading', { name: 'Deactivate employee?' })).toHaveCount(0)
     await expect(page.getByRole('table').getByText('Inactive')).toBeVisible()
+  })
+
+  test('permanently deletes an employee only after typing their name', async ({ page }) => {
+    await mockAuth(page)
+    let deleted = false
+    await page.route('**/api/v1/users?**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: deleted ? [] : [employee()],
+          pagination: { page: 1, page_size: 25, total: deleted ? 0 : 1, total_pages: 1 },
+        }),
+      })
+    })
+    await page.route('**/api/v1/users/user-1', async (route) => {
+      if (route.request().method() !== 'DELETE') return route.fallback()
+      deleted = true
+      await route.fulfill({ status: 204 })
+    })
+
+    await login(page)
+    await page.getByRole('navigation', { name: 'Primary' }).first().getByRole('link', { name: 'Manage employees' }).click()
+    await expect(page.getByRole('table').getByText('Riya Sharma')).toBeVisible()
+
+    await page.getByRole('table').getByRole('button', { name: /actions for riya sharma/i }).click()
+    await page.getByRole('menuitem', { name: /delete/i }).click()
+
+    await expect(page.getByRole('heading', { name: /delete riya sharma permanently/i })).toBeVisible()
+    const confirm = page.getByRole('button', { name: 'Delete permanently' })
+    await expect(confirm).toBeDisabled()
+
+    await page.getByLabel(/type "riya sharma" to confirm/i).fill('Riya Sharma')
+    await expect(confirm).toBeEnabled()
+    await confirm.click()
+
+    await expect(page.getByRole('heading', { name: /delete riya sharma permanently/i })).toHaveCount(0)
+    await expect(page.getByText('No employees yet')).toBeVisible()
   })
 })

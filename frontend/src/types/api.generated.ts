@@ -563,7 +563,20 @@ export interface paths {
         get: operations["read_user_api_v1_users__user_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Permanently delete an employee or manager
+         * @description Permanently delete an employee or manager and their attendance history.
+         *
+         *     **Irreversible.** Deactivation (``POST /users/{id}/deactivate``) is the
+         *     reversible way to retire an account and keeps history; this removes the person
+         *     and every attendance event recorded for them. Only ``STAFF`` and ``MANAGER``
+         *     accounts can be deleted - a ``TENANT_ADMIN`` cannot, and nobody can delete
+         *     themselves. An id in another tenant returns 404, like every other lookup.
+         *
+         *     A ``USER_DELETED`` audit row records who was removed, by whom, and how many
+         *     attendance events went with them.
+         */
+        delete: operations["delete_user_api_v1_users__user_id__delete"];
         options?: never;
         head?: never;
         /**
@@ -2744,6 +2757,63 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    delete_user_api_v1_users__user_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permissions, deleting yourself, or deleting an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description User not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

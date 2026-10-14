@@ -1,19 +1,29 @@
 """Tenant-admin user management (spec checks 1-27, 28-38, 42-44).
 
-Creation, listing, detail, profile update, role change and lifecycle.
+Creation, listing, detail, profile update, role change, lifecycle and the one
+irreversible operation, deletion.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import AuditLog, RefreshToken, User, UserRole, UserStatus
+from app.models import (
+    AttendanceEvent,
+    AttendanceEventType,
+    AuditLog,
+    RefreshToken,
+    User,
+    UserRole,
+    UserStatus,
+)
 from app.services.auth.password import verify_password
 from app.services.users import service as users_service
 from tests.conftest import Org, auth_header
@@ -649,19 +659,280 @@ def test_admin_cannot_deactivate_themselves(
     assert "your own account" in response.json()["detail"]
 
 
-def test_no_user_is_ever_physically_deleted(
+# ---------------------------------------------------------------------------
+# Deletion - the one irreversible operation
+# ---------------------------------------------------------------------------
+
+
+def _add_events(
+    user: User,
+    factory: Callable[..., object],
+    *,
+    pairs: int = 2,
+) -> None:
+    """Give ``user`` ``pairs`` complete check-in / check-out days."""
+    base = datetime(2026, 8, 1, 9, 0, tzinfo=UTC)
+    for day in range(pairs):
+        start = base + timedelta(days=day)
+        factory(user, event_type=AttendanceEventType.CHECK_IN, at=start)
+        factory(
+            user,
+            event_type=AttendanceEventType.CHECK_OUT,
+            at=start + timedelta(hours=8),
+        )
+
+
+def _event_count(session: Session, user_id: uuid.UUID) -> int:
+    return session.scalar(
+        select(func.count())
+        .select_from(AttendanceEvent)
+        .where(AttendanceEvent.user_id == user_id)
+    ) or 0
+
+
+def test_admin_can_permanently_delete_an_employee_and_their_history(
+    client: TestClient,
+    db_session: Session,
+    org_factory: Callable[..., Org],
+    attendance_event_factory: Callable[..., object],
+) -> None:
+    o = org_factory()
+    _add_events(o.staff, attendance_event_factory, pairs=2)
+    # A neighbour's history must be left completely alone.
+    _add_events(o.manager, attendance_event_factory, pairs=1)
+    assert _event_count(db_session, o.staff.id) == 4
+
+    response = client.delete(f"{USERS_URL}/{o.staff.id}", headers=admin(o))
+
+    assert response.status_code == 204
+    assert response.content == b""
+    db_session.expire_all()
+    assert db_session.get(User, o.staff.id) is None
+    assert _event_count(db_session, o.staff.id) == 0
+    assert _event_count(db_session, o.manager.id) == 2
+    # Authentication state goes with the person (ON DELETE CASCADE).
+    assert db_session.scalar(
+        select(func.count()).select_from(RefreshToken)
+        .where(RefreshToken.user_id == o.staff.id)
+    ) == 0
+
+
+def test_admin_can_permanently_delete_a_manager(
     client: TestClient, db_session: Session, org_factory: Callable[..., Org]
 ) -> None:
-    """Karya is an audit system: identities persist so history stays resolvable."""
     o = org_factory()
-    before = db_session.scalar(select(func.count()).select_from(User))
+
+    response = client.delete(f"{USERS_URL}/{o.manager.id}", headers=admin(o))
+
+    assert response.status_code == 204
+    db_session.expire_all()
+    assert db_session.get(User, o.manager.id) is None
+
+
+def test_deleting_leaves_an_audit_row_with_who_was_removed(
+    client: TestClient,
+    db_session: Session,
+    org_factory: Callable[..., Org],
+    attendance_event_factory: Callable[..., object],
+) -> None:
+    o = org_factory()
+    _add_events(o.staff, attendance_event_factory, pairs=2)
+    staff_id = o.staff.id
+
+    client.delete(f"{USERS_URL}/{staff_id}", headers=admin(o))
+
+    db_session.expire_all()
+    row = db_session.scalar(
+        select(AuditLog).where(AuditLog.action == "USER_DELETED")
+    )
+    assert row is not None
+    assert row.tenant_id == o.tenant.id
+    assert row.actor_user_id == o.admin.id
+    # `target_id` is an untyped UUID, so the row outlives the user it describes.
+    assert row.target_type == "User"
+    assert row.target_id == staff_id
+    assert row.log_metadata == {
+        "target_user_id": str(staff_id),
+        "name": "Rahul Sharma",
+        "email": "staff@acme.com",
+        "employee_code": "EMP-1",
+        "role": "STAFF",
+        "attendance_events_deleted": 4,
+    }
+    # Nothing secret is ever written to the trail.
+    assert "password" not in str(row.log_metadata).lower()
+
+
+def test_earlier_audit_history_about_a_deleted_user_survives(
+    client: TestClient, db_session: Session, org_factory: Callable[..., Org]
+) -> None:
+    o = org_factory()
+    client.post(f"{USERS_URL}/{o.staff.id}/deactivate", headers=admin(o))
+    client.post(f"{USERS_URL}/{o.staff.id}/activate", headers=admin(o))
+
+    client.delete(f"{USERS_URL}/{o.staff.id}", headers=admin(o))
+
+    db_session.expire_all()
+    actions = {
+        a for (a,) in db_session.execute(
+            select(AuditLog.action).where(AuditLog.target_id == o.staff.id)
+        )
+    }
+    assert {"USER_DEACTIVATED", "USER_ACTIVATED", "USER_DELETED"} <= actions
+
+
+def test_deleted_user_can_no_longer_authenticate(
+    client: TestClient, org_factory: Callable[..., Org]
+) -> None:
+    o = org_factory()
+    client.delete(f"{USERS_URL}/{o.staff.id}", headers=admin(o))
+
+    assert client.get(
+        "/api/v1/users/me", headers=auth_header(o.staff_token)
+    ).status_code == 401
+    assert client.post(
+        "/api/v1/auth/login",
+        json={"tenant_slug": "acme", "email": "staff@acme.com",
+              "password": "correct-horse-battery-staple"},
+    ).status_code == 401
+
+
+def test_a_deleted_users_email_and_code_can_be_reused(
+    client: TestClient, org_factory: Callable[..., Org]
+) -> None:
+    """Unlike deactivation, deletion frees the identity for someone new."""
+    o = org_factory()
+    client.delete(f"{USERS_URL}/{o.staff.id}", headers=admin(o))
+
+    response = client.post(
+        USERS_URL,
+        json=create_payload(email="staff@acme.com", employee_code="EMP-1"),
+        headers=admin(o),
+    )
+
+    assert response.status_code == 201
+
+
+def test_a_deleted_user_is_gone_from_lookups(
+    client: TestClient, org_factory: Callable[..., Org]
+) -> None:
+    o = org_factory()
+    client.delete(f"{USERS_URL}/{o.staff.id}", headers=admin(o))
+
+    assert client.get(
+        f"{USERS_URL}/{o.staff.id}", headers=admin(o)
+    ).status_code == 404
+    # A second delete is a plain 404, not an error and not a success.
+    assert client.delete(
+        f"{USERS_URL}/{o.staff.id}", headers=admin(o)
+    ).status_code == 404
+
+
+def test_admin_cannot_delete_themselves(
+    client: TestClient, db_session: Session, org_factory: Callable[..., Org],
+    user_factory: Callable[..., User],
+) -> None:
+    o = org_factory()
+    # A second admin exists, so this is the self-rule refusing, nothing else.
+    user_factory(o.tenant, email="admin2@acme.com", employee_code="ADM-2",
+                 role=UserRole.TENANT_ADMIN)
+
+    response = client.delete(f"{USERS_URL}/{o.admin.id}", headers=admin(o))
+
+    assert response.status_code == 403
+    assert "your own account" in response.json()["detail"]
+    db_session.expire_all()
+    assert db_session.get(User, o.admin.id) is not None
+
+
+def test_an_administrator_cannot_be_deleted(
+    client: TestClient, db_session: Session, org_factory: Callable[..., Org],
+    user_factory: Callable[..., User],
+) -> None:
+    o = org_factory()
+    other_admin = user_factory(
+        o.tenant, email="admin2@acme.com", employee_code="ADM-2",
+        role=UserRole.TENANT_ADMIN,
+    )
+
+    response = client.delete(f"{USERS_URL}/{other_admin.id}", headers=admin(o))
+
+    assert response.status_code == 403
+    assert "Administrators cannot be deleted" in response.json()["detail"]
+    db_session.expire_all()
+    assert db_session.get(User, other_admin.id) is not None
+    assert "USER_DELETED" not in audit_actions(db_session)
+
+
+def test_a_demoted_administrator_can_then_be_deleted(
+    client: TestClient, org_factory: Callable[..., Org],
+    user_factory: Callable[..., User],
+) -> None:
+    """The documented path for removing an admin: demote first, then delete."""
+    o = org_factory()
+    other_admin = user_factory(
+        o.tenant, email="admin2@acme.com", employee_code="ADM-2",
+        role=UserRole.TENANT_ADMIN,
+    )
+    client.patch(
+        f"{USERS_URL}/{other_admin.id}/role",
+        json={"role": "STAFF"}, headers=admin(o),
+    )
+
+    assert client.delete(
+        f"{USERS_URL}/{other_admin.id}", headers=admin(o)
+    ).status_code == 204
+
+
+@pytest.mark.parametrize("who", ["manager_token", "staff_token"])
+def test_only_a_tenant_admin_can_delete(
+    client: TestClient, db_session: Session, org_factory: Callable[..., Org],
+    who: str,
+) -> None:
+    o = org_factory()
+    token = getattr(o, who)
+
+    response = client.delete(f"{USERS_URL}/{o.staff.id}", headers=auth_header(token))
+
+    assert response.status_code == 403
+    db_session.expire_all()
+    assert db_session.get(User, o.staff.id) is not None
+
+
+def test_delete_requires_authentication(
+    client: TestClient, org_factory: Callable[..., Org]
+) -> None:
+    o = org_factory()
+    assert client.delete(f"{USERS_URL}/{o.staff.id}").status_code == 401
+
+
+def test_delete_cannot_reach_another_tenant(
+    client: TestClient, db_session: Session, org_factory: Callable[..., Org],
+    attendance_event_factory: Callable[..., object],
+) -> None:
+    """Cross-tenant ids are 404 - never 403 - and nothing of theirs is touched."""
+    mine = org_factory("acme")
+    theirs = org_factory("globex")
+    _add_events(theirs.staff, attendance_event_factory, pairs=1)
+
+    response = client.delete(f"{USERS_URL}/{theirs.staff.id}", headers=admin(mine))
+
+    assert response.status_code == 404
+    db_session.expire_all()
+    assert db_session.get(User, theirs.staff.id) is not None
+    assert _event_count(db_session, theirs.staff.id) == 2
+
+
+def test_deactivation_is_still_non_destructive(
+    client: TestClient, db_session: Session, org_factory: Callable[..., Org],
+    attendance_event_factory: Callable[..., object],
+) -> None:
+    """Deactivate keeps the person and their history; only DELETE erases them."""
+    o = org_factory()
+    _add_events(o.staff, attendance_event_factory, pairs=1)
 
     client.post(f"{USERS_URL}/{o.staff.id}/deactivate", headers=admin(o))
 
     db_session.expire_all()
-    assert db_session.scalar(select(func.count()).select_from(User)) == before
     assert db_session.get(User, o.staff.id) is not None
-    # And there is no route that could delete one.
-    assert client.request(
-        "DELETE", f"{USERS_URL}/{o.staff.id}", headers=admin(o)
-    ).status_code == 405
+    assert _event_count(db_session, o.staff.id) == 2

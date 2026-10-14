@@ -7,6 +7,7 @@ import { Alert } from '@/components/ui/Alert'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { useAuth } from '@/features/auth/useAuth'
+import { brandInputClass } from '@/features/marketing/brandStyles'
 import { loginSchema, type LoginFormValues } from '@/features/auth/loginSchema'
 import { isApiError } from '@/lib/api/errors'
 import { describeError } from '@/lib/errors/describeError'
@@ -68,27 +69,38 @@ export function LoginForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
+    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-6" noValidate>
       {submitError !== null && <Alert variant="danger">{loginErrorMessage(submitError)}</Alert>}
 
       <Input
         label="Organization ID"
         autoComplete="organization"
         placeholder="acme"
+        hint="The short ID your admin chose when they signed up."
+        className={brandInputClass}
         error={errors.tenantSlug?.message}
         {...register('tenantSlug')}
       />
-      <Input label="Email" type="email" autoComplete="email" error={errors.email?.message} {...register('email')} />
+      <Input
+        label="Email"
+        type="email"
+        autoComplete="email"
+        placeholder="you@company.com"
+        className={brandInputClass}
+        error={errors.email?.message}
+        {...register('email')}
+      />
       <Input
         label="Password"
         type="password"
         autoComplete="current-password"
+        className={brandInputClass}
         error={errors.password?.message}
         {...register('password')}
       />
 
-      <Button type="submit" isLoading={isLoggingIn} className="mt-2">
-        {isLoggingIn ? 'Signing in…' : 'Sign in'}
+      <Button type="submit" variant="brand" size="xl" isLoading={isLoggingIn} className="w-full">
+        {isLoggingIn ? 'Logging in…' : 'Log in'}
       </Button>
     </form>
   )

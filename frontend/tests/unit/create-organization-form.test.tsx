@@ -25,7 +25,7 @@ async function fillValidForm() {
   await userEvent.type(screen.getByLabelText(/organization id/i), 'acme')
   await userEvent.type(screen.getByLabelText(/your name/i), 'Ada Lovelace')
   await userEvent.type(screen.getByLabelText(/your email/i), 'ada@acme.com')
-  await userEvent.type(screen.getByLabelText(/password/i), 'correct-horse-battery-staple')
+  await userEvent.type(screen.getByLabelText(/^password$/i), 'correct-horse-battery-staple')
 }
 
 describe('CreateOrganizationForm', () => {

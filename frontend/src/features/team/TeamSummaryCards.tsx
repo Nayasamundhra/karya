@@ -1,5 +1,4 @@
-import { Card, CardContent } from '@/components/ui/Card'
-import { Skeleton } from '@/components/ui/Skeleton'
+import { StatCard, StatCardGrid, StatCardGridSkeleton } from '@/components/ui/StatCard'
 import type { TeamAttendanceResponse } from '@/lib/api/types'
 
 /** The four counts a manager needs at a glance (§3) — read verbatim from the
@@ -14,30 +13,14 @@ export function TeamSummaryCards({ summary }: { summary: TeamAttendanceResponse[
   ]
 
   return (
-    <div role="group" aria-label="Team summary" className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <StatCardGrid ariaLabel="Team summary">
       {cards.map((card) => (
-        <Card key={card.label}>
-          <CardContent className="flex flex-col gap-1 p-4">
-            <p className="text-2xl font-semibold text-foreground">{card.value}</p>
-            <p className="text-xs font-medium text-foreground-muted">{card.label}</p>
-          </CardContent>
-        </Card>
+        <StatCard key={card.label} label={card.label} value={String(card.value)} hue="manager" />
       ))}
-    </div>
+    </StatCardGrid>
   )
 }
 
 export function TeamSummaryCardsSkeleton() {
-  return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      {Array.from({ length: 4 }, (_, i) => (
-        <Card key={i}>
-          <CardContent className="flex flex-col gap-2 p-4">
-            <Skeleton className="h-8 w-12" />
-            <Skeleton className="h-3 w-20" />
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  )
+  return <StatCardGridSkeleton count={4} />
 }

@@ -15,8 +15,11 @@ are the kind of rule that a naive check-then-act would silently break:
   the ``IntegrityError`` it raises - never by a preceding SELECT, which two
   concurrent creations would both pass.
 
-Nothing is deleted. Karya is an attendance and audit system, so identities move
-between ACTIVE and INACTIVE and their history stays intact.
+Deactivation is the normal way to retire an account: identities move between
+ACTIVE and INACTIVE and their history stays intact. ``delete_user`` is the one
+deliberate exception - an irreversible, administrator-confirmed erasure of an
+employee or manager *and their attendance history* - and it leaves its own
+audit row behind. See its docstring for exactly what goes and what stays.
 
 Callers own the commit; each mutation writes its audit row inside the same
 transaction as the change itself.
@@ -28,15 +31,17 @@ import uuid
 from collections.abc import Sequence
 from typing import Any, Final
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.attendance_event import AttendanceEvent
 from app.models.audit_log import AuditLog
 from app.models.user import User, UserRole, UserStatus
 from app.services.auth import refresh_tokens
 from app.services.auth.password import hash_password, verify_password
 from app.services.users.errors import (
+    AdministratorDeletionError,
     EmailAlreadyExistsError,
     EmployeeCodeAlreadyExistsError,
     InvalidCurrentPasswordError,
@@ -44,6 +49,7 @@ from app.services.users.errors import (
     PasswordTooSimilarError,
     PasswordUnchangedError,
     SelfDeactivationError,
+    SelfDeletionError,
     SelfRoleChangeError,
     UserNotFoundError,
 )
@@ -54,6 +60,7 @@ ACTION_USER_UPDATED: Final = "USER_UPDATED"
 ACTION_USER_ROLE_CHANGED: Final = "USER_ROLE_CHANGED"
 ACTION_USER_ACTIVATED: Final = "USER_ACTIVATED"
 ACTION_USER_DEACTIVATED: Final = "USER_DEACTIVATED"
+ACTION_USER_DELETED: Final = "USER_DELETED"
 ACTION_PASSWORD_CHANGED: Final = "PASSWORD_CHANGED"
 
 #: Bounds on the user list. Unbounded listing of a large tenant is a denial of
@@ -501,6 +508,100 @@ def set_user_status(
         metadata={"status": status.value},
     )
     return user
+
+
+# ---------------------------------------------------------------------------
+# Deletion
+# ---------------------------------------------------------------------------
+
+
+def delete_user(
+    session: Session,
+    *,
+    tenant_id: uuid.UUID,
+    actor: User,
+    user_id: uuid.UUID,
+) -> int:
+    """Permanently delete an employee or manager, **and their attendance history**.
+
+    Irreversible. Prefer ``set_user_status(INACTIVE)`` unless the person and
+    their records genuinely have to go - deactivation keeps history resolvable,
+    this does not.
+
+    What goes, in one transaction:
+
+    * the user row;
+    * every ``attendance_events`` row for them (the foreign key is ``RESTRICT``
+      on purpose, so the events are deleted explicitly here rather than silently
+      cascaded - a delete that forgot them would fail loudly, not orphan them);
+    * their refresh sessions and email-verification tokens, via the database's
+      ``ON DELETE CASCADE`` (authentication state, not history).
+
+    What stays:
+
+    * audit rows *about* them (``target_id`` is an untyped UUID, not a foreign
+      key, precisely so these survive);
+    * audit rows they *wrote* as an actor, which keep their content but lose the
+      actor link (``ON DELETE SET NULL``);
+    * a new ``USER_DELETED`` audit row recording who was removed, by whom, and
+      how many attendance events went with them. It holds the person's name,
+      email, code and role - the only copy of that identity left, kept so an
+      admin can still answer "who was this?".
+
+    The target row is locked ``FOR UPDATE`` first - the same lock every
+    check-in/out takes (``attendance.service._lock_user``) - so a delete cannot
+    interleave with an in-flight attendance write for the same person: the
+    attendance side then finds no row and refuses cleanly instead of inserting an
+    event that points at nobody.
+
+    Returns the number of attendance events deleted.
+
+    Raises:
+        SelfDeletionError: an actor may not delete themselves.
+        UserNotFoundError: the target is absent or in another tenant.
+        AdministratorDeletionError: the target is a ``TENANT_ADMIN``.
+    """
+    if actor.id == user_id:
+        raise SelfDeletionError
+
+    user = session.scalar(
+        select(User)
+        .where(User.id == user_id, User.tenant_id == tenant_id)
+        .with_for_update()
+    )
+    if user is None:
+        raise UserNotFoundError
+    if user.role == UserRole.TENANT_ADMIN:
+        raise AdministratorDeletionError
+
+    # Captured before the row is gone - this is the audit row's only record of
+    # who the person was.
+    snapshot = {
+        "name": user.name,
+        "email": user.email,
+        "employee_code": user.employee_code,
+        "role": str(user.role.value if isinstance(user.role, UserRole) else user.role),
+    }
+
+    events_deleted = session.execute(
+        delete(AttendanceEvent).where(
+            AttendanceEvent.user_id == user.id,
+            AttendanceEvent.tenant_id == tenant_id,
+        )
+    ).rowcount
+
+    session.delete(user)
+    session.flush()
+
+    _audit(
+        session,
+        action=ACTION_USER_DELETED,
+        tenant_id=tenant_id,
+        actor_user_id=actor.id,
+        target_user_id=user_id,
+        metadata={**snapshot, "attendance_events_deleted": events_deleted},
+    )
+    return events_deleted
 
 
 # ---------------------------------------------------------------------------

@@ -25,14 +25,14 @@ export function BottomNav() {
           end={item.to === '/'}
           className={({ isActive }) =>
             cn(
-              'flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-xs font-medium text-foreground-muted',
+              'flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] font-semibold text-foreground-muted',
               isActive && bottomNavActive,
             )
           }
         >
           {({ isActive }: { isActive: boolean }) => (
             <>
-              <item.icon className="size-5" aria-hidden="true" />
+              <item.icon className="size-[22px]" strokeWidth={1.75} aria-hidden="true" />
               <span>{item.label}</span>
               {isActive && <span className="sr-only"> (current page)</span>}
             </>

@@ -30,7 +30,7 @@ describe('LoginForm', () => {
 
   it('validates required fields before calling the API', async () => {
     renderForm()
-    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    await userEvent.click(screen.getByRole('button', { name: /log in/i }))
 
     expect(await screen.findByText(/enter your organization id/i)).toBeInTheDocument()
     expect(screen.getByText(/enter your email/i)).toBeInTheDocument()
@@ -46,10 +46,10 @@ describe('LoginForm', () => {
 
     await userEvent.type(screen.getByLabelText(/organization id/i), 'acme')
     await userEvent.type(screen.getByLabelText(/email/i), 'riya@acme.com')
-    await userEvent.type(screen.getByLabelText(/password/i), 'correct-horse-battery')
-    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    await userEvent.type(screen.getByLabelText(/^password$/i), 'correct-horse-battery')
+    await userEvent.click(screen.getByRole('button', { name: /log in/i }))
 
-    expect(await screen.findByRole('button', { name: /signing in/i })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: /logging in/i })).toBeDisabled()
     expect(vi.mocked(authSession.login).mock.calls[0]?.[0]).toEqual({
       tenantSlug: 'acme',
       email: 'riya@acme.com',
@@ -66,8 +66,8 @@ describe('LoginForm', () => {
 
     await userEvent.type(screen.getByLabelText(/organization id/i), 'acme')
     await userEvent.type(screen.getByLabelText(/email/i), 'riya@acme.com')
-    await userEvent.type(screen.getByLabelText(/password/i), 'wrong-password')
-    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    await userEvent.type(screen.getByLabelText(/^password$/i), 'wrong-password')
+    await userEvent.click(screen.getByRole('button', { name: /log in/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/invalid credentials/i)
     expect(screen.queryByText(/email/i, { selector: 'p' })).not.toBeInTheDocument()
@@ -81,8 +81,8 @@ describe('LoginForm', () => {
 
     await userEvent.type(screen.getByLabelText(/organization id/i), 'acme')
     await userEvent.type(screen.getByLabelText(/email/i), 'riya@acme.com')
-    await userEvent.type(screen.getByLabelText(/password/i), 'whatever123')
-    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    await userEvent.type(screen.getByLabelText(/^password$/i), 'whatever123')
+    await userEvent.click(screen.getByRole('button', { name: /log in/i }))
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/wait about 42s/i))
   })

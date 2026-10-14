@@ -17,7 +17,7 @@ export interface EmptyStateProps {
  * user their data is missing when the real problem was a failed request. */
 export function EmptyState({ icon: Icon = Inbox, title, description, action, className }: EmptyStateProps) {
   return (
-    <div className={cn('flex flex-col items-center gap-3 rounded-lg border border-dashed border-border p-8 text-center', className)}>
+    <div className={cn('flex flex-col items-center gap-3 rounded-3xl border border-dashed border-border p-8 text-center', className)}>
       <Icon className="size-8 text-foreground-muted" aria-hidden="true" />
       <div className="flex flex-col gap-1">
         <p className="text-sm font-medium text-foreground">{title}</p>

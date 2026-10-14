@@ -3,7 +3,7 @@
   "info": {
     "title": "Karya",
     "summary": "Multi-tenant staff attendance and presence verification platform.",
-    "description": "\nMulti-tenant staff attendance with **server-verified presence**.\n\nEvery request is scoped to the authenticated user's own tenant. Identity, role,\ntenant, GPS validity, geofence distance, QR validity and the attendance timestamp\nare all determined by the server; no client-supplied value influences any of them.\n\n**Authentication.** `POST /api/v1/auth/login` returns a short-lived JWT access\ntoken and a long-lived, revocable refresh token. Send the access token as\n`Authorization: Bearer <token>`. Refresh tokens must be rotated - the presented\ntoken is revoked as part of a successful rotation, so replaying one fails.\n\n**Errors.** Every error response is `{\"detail\": ...}`. Validation failures return\n422 with a list of `{type, loc, msg}` under `detail`; the submitted value is never\nechoed back. Rate-limited requests return 429 with a `Retry-After` header. Every\nresponse, success or failure, carries an `X-Request-ID` header - quote it when\nreporting a problem.\n\n**Presence and attendance refusals are not HTTP errors.** A well-formed request\nrefused on its merits - outside the geofence, QR already used, already checked in -\nreturns **200** with `verified: false` or `success: false` and a machine-readable\n`reason`. 4xx is reserved for requests that could not be processed at all.\n\n**Nothing is ever deleted.** There is no `DELETE` method anywhere in this API.\nUsers move between `ACTIVE` and `INACTIVE`; attendance events are immutable.\n",
+    "description": "\nMulti-tenant staff attendance with **server-verified presence**.\n\nEvery request is scoped to the authenticated user's own tenant. Identity, role,\ntenant, GPS validity, geofence distance, QR validity and the attendance timestamp\nare all determined by the server; no client-supplied value influences any of them.\n\n**Authentication.** `POST /api/v1/auth/login` returns a short-lived JWT access\ntoken and a long-lived, revocable refresh token. Send the access token as\n`Authorization: Bearer <token>`. Refresh tokens must be rotated - the presented\ntoken is revoked as part of a successful rotation, so replaying one fails.\n\n**Errors.** Every error response is `{\"detail\": ...}`. Validation failures return\n422 with a list of `{type, loc, msg}` under `detail`; the submitted value is never\nechoed back. Rate-limited requests return 429 with a `Retry-After` header. Every\nresponse, success or failure, carries an `X-Request-ID` header - quote it when\nreporting a problem.\n\n**Presence and attendance refusals are not HTTP errors.** A well-formed request\nrefused on its merits - outside the geofence, QR already used, already checked in -\nreturns **200** with `verified: false` or `success: false` and a machine-readable\n`reason`. 4xx is reserved for requests that could not be processed at all.\n\n**Attendance is never edited or deleted on its own.** Users normally move between\n`ACTIVE` and `INACTIVE` and keep their history; attendance events are immutable. The\nsingle exception is `DELETE /users/{user_id}`, which a tenant administrator can use\nto permanently erase an employee or manager together with their events - never an\nadministrator, never themselves - and which leaves a `USER_DELETED` audit row.\n",
     "version": "0.7.0"
   },
   "paths": {
@@ -1407,6 +1407,58 @@
           },
           "409": {
             "description": "Email or employee code already in use"
+          },
+          "429": {
+            "description": "Too many requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Permanently delete an employee or manager",
+        "description": "Permanently delete an employee or manager and their attendance history.\n\n**Irreversible.** Deactivation (``POST /users/{id}/deactivate``) is the\nreversible way to retire an account and keeps history; this removes the person\nand every attendance event recorded for them. Only ``STAFF`` and ``MANAGER``\naccounts can be deleted - a ``TENANT_ADMIN`` cannot, and nobody can delete\nthemselves. An id in another tenant returns 404, like every other lookup.\n\nA ``USER_DELETED`` audit row records who was removed, by whom, and how many\nattendance events went with them.",
+        "operationId": "delete_user_api_v1_users__user_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Insufficient permissions, deleting yourself, or deleting an administrator"
+          },
+          "404": {
+            "description": "User not found"
           },
           "429": {
             "description": "Too many requests"

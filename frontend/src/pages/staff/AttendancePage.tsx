@@ -3,6 +3,7 @@
  * one obvious action up top, basic history below — no dashboard statistics,
  * no charts (Phase 10's job, not this one).
  */
+import { PageHeader } from '@/components/layout/PageHeader'
 import { AttendanceHistoryList } from '@/features/attendance/AttendanceHistoryList'
 import { AttendanceStatusCard, AttendanceStatusCardSkeleton } from '@/features/attendance/AttendanceStatusCard'
 import { useTodayAttendance } from '@/features/attendance/useTodayAttendance'
@@ -13,10 +14,7 @@ export default function AttendancePage() {
 
   return (
     <div className="flex max-w-2xl flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">Attendance</h1>
-        <p className="text-sm text-foreground-muted">Today's status and your recent history.</p>
-      </div>
+      <PageHeader eyebrow="Your record" title="Attendance" description="Today's status and your recent history." />
 
       {isPending && <AttendanceStatusCardSkeleton />}
       {isError && <ErrorState error={error} onRetry={refetch} />}

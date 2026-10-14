@@ -1,4 +1,4 @@
-import { Building2 } from 'lucide-react'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { useSearchParams } from 'react-router-dom'
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs'
@@ -32,15 +32,7 @@ export default function OrganizationPage() {
 
   return (
     <div className="flex max-w-3xl flex-col gap-6">
-      <div className="flex items-center gap-3">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-admin-50 text-admin-700">
-          <Building2 className="size-5" aria-hidden="true" />
-        </span>
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Organization</h1>
-          <p className="text-sm text-foreground-muted">Settings and attendance location.</p>
-        </div>
-      </div>
+      <PageHeader eyebrow="Admin" title="Organization" description="Settings and attendance location." />
 
       <SetupProgressStrip />
 

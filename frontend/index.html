@@ -4,7 +4,19 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#faf9f6" />
+    <!-- Light is the default for everyone; dark only if the user chose it
+         (src/lib/theme/theme.ts). Runs before first paint so a returning
+         dark-mode user never sees a flash of light. Same key and rule as
+         `readStoredTheme` — keep them in step. -->
+    <script>
+      try {
+        if (localStorage.getItem('karya-theme') === 'dark') {
+          document.documentElement.setAttribute('data-theme', 'dark')
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0a0a0b')
+        }
+      } catch (e) {}
+    </script>
     <meta name="description" content="Karya — multi-tenant staff attendance with server-verified presence." />
 
     <!-- iOS has no equivalent of the web app manifest's `display: standalone`
@@ -19,11 +31,12 @@
          nothing ever loaded it — every render silently fell through to the
          OS's own sans-serif. This actually loads it, plus 'Outfit' for the
          redesign's large hero moments (a check-in timer, the kiosk clock) —
-         see styles/index.css's --font-display. -->
+         see styles/index.css's --font-display. 'Geist' is the public-page
+         (landing / login / sign up) face — see --font-brand. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@600;700&family=Geist:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
 

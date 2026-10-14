@@ -9,17 +9,19 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import UsersPage from '@/pages/admin/UsersPage'
+import { useAuthStore } from '@/stores/authStore'
 import { useToastStore } from '@/stores/toastStore'
 import type { UserDetailResponse, UserListResponse } from '@/lib/api/types'
 import { TestQueryProvider } from './helpers/testQueryClient'
 
-const { listUsers, createUser, updateUser, changeUserRole, activateUser, deactivateUser } = vi.hoisted(() => ({
+const { listUsers, createUser, updateUser, changeUserRole, activateUser, deactivateUser, deleteUser } = vi.hoisted(() => ({
   listUsers: vi.fn(),
   createUser: vi.fn(),
   updateUser: vi.fn(),
   changeUserRole: vi.fn(),
   activateUser: vi.fn(),
   deactivateUser: vi.fn(),
+  deleteUser: vi.fn(),
 }))
 
 vi.mock('@/lib/api/endpoints/users', async (importOriginal) => ({
@@ -30,7 +32,14 @@ vi.mock('@/lib/api/endpoints/users', async (importOriginal) => ({
   changeUserRole,
   activateUser,
   deactivateUser,
+  deleteUser,
 }))
+
+// The first test in this file pays the cost of importing the whole users page
+// (Radix select/menu/dialog, the table) and the file drives several dialogs
+// through userEvent — comfortably inside the 5s default on an idle machine, but
+// it timed out in the full parallel suite when other work was running.
+vi.setConfig({ testTimeout: 20_000 })
 
 beforeAll(() => {
   // jsdom's implementations of these throw/no-op in ways Radix doesn't expect.
@@ -74,6 +83,8 @@ describe('UsersPage (tenant admin employee management)', () => {
     changeUserRole.mockReset()
     activateUser.mockReset()
     deactivateUser.mockReset()
+    deleteUser.mockReset()
+    useAuthStore.getState().clearSession()
   })
 
   it('lists employees with name, code, role, and status', async () => {
@@ -260,5 +271,137 @@ describe('UsersPage (tenant admin employee management)', () => {
 
     expect(await screen.findByText('You cannot change your own role')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Change role' })).toBeInTheDocument()
+  })
+
+  describe('permanent deletion', () => {
+    function signInAsAdmin(id = 'admin-self') {
+      useAuthStore.setState({
+        status: 'authenticated',
+        user: {
+          id,
+          tenant_id: 'tenant-1',
+          employee_code: 'ADM-1',
+          name: 'Ada Admin',
+          email: 'ada@acme.com',
+          role: 'TENANT_ADMIN',
+          status: 'ACTIVE',
+        },
+        accessToken: 'token',
+        accessTokenExpiresAt: Date.now() + 15 * 60 * 1000,
+      })
+    }
+
+    async function openActions(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
+      const table = await screen.findByRole('table')
+      await user.click(within(table).getByRole('button', { name }))
+    }
+
+    it('offers Delete for an employee and a manager, but never for an administrator or yourself', async () => {
+      signInAsAdmin('admin-self')
+      listUsers.mockResolvedValue(
+        listResponse([
+          employee({ id: 'user-1', name: 'Riya Sharma', role: 'STAFF' }),
+          employee({ id: 'user-2', name: 'Amit Kumar', role: 'MANAGER' }),
+          employee({ id: 'user-3', name: 'Other Admin', role: 'TENANT_ADMIN' }),
+          employee({ id: 'admin-self', name: 'Ada Admin', role: 'TENANT_ADMIN' }),
+        ]),
+      )
+      const user = userEvent.setup()
+      renderUsersPage()
+
+      await openActions(user, /actions for riya sharma/i)
+      expect(await screen.findByRole('menuitem', { name: /delete/i })).toBeInTheDocument()
+      await user.keyboard('{Escape}')
+
+      await openActions(user, /actions for amit kumar/i)
+      expect(await screen.findByRole('menuitem', { name: /delete/i })).toBeInTheDocument()
+      await user.keyboard('{Escape}')
+
+      await openActions(user, /actions for other admin/i)
+      await screen.findByRole('menuitem', { name: 'Edit' })
+      expect(screen.queryByRole('menuitem', { name: /delete/i })).not.toBeInTheDocument()
+      await user.keyboard('{Escape}')
+
+      await openActions(user, /actions for ada admin/i)
+      await screen.findByRole('menuitem', { name: 'Edit' })
+      expect(screen.queryByRole('menuitem', { name: /delete/i })).not.toBeInTheDocument()
+    })
+
+    it('requires typing the name, and only then deletes', async () => {
+      signInAsAdmin()
+      listUsers.mockResolvedValue(listResponse([employee()]))
+      deleteUser.mockResolvedValue(null)
+      const user = userEvent.setup()
+      renderUsersPage()
+
+      await openActions(user, /actions for riya sharma/i)
+      await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
+
+      expect(await screen.findByText(/delete riya sharma permanently\?/i)).toBeInTheDocument()
+      expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument()
+      const confirm = screen.getByRole('button', { name: 'Delete permanently' })
+      expect(confirm).toBeDisabled()
+
+      await user.type(screen.getByLabelText(/type "riya sharma" to confirm/i), 'riya')
+      expect(confirm).toBeDisabled()
+      expect(deleteUser).not.toHaveBeenCalled()
+
+      await user.clear(screen.getByLabelText(/type "riya sharma" to confirm/i))
+      await user.type(screen.getByLabelText(/type "riya sharma" to confirm/i), 'Riya Sharma')
+      expect(confirm).toBeEnabled()
+      await user.click(confirm)
+
+      await waitFor(() => expect(deleteUser).toHaveBeenCalledWith('user-1'))
+      await waitFor(() => expect(screen.queryByText(/delete riya sharma permanently/i)).not.toBeInTheDocument())
+    })
+
+    it('refreshes the list after a delete', async () => {
+      signInAsAdmin()
+      listUsers.mockResolvedValueOnce(listResponse([employee()])).mockResolvedValue(listResponse([]))
+      deleteUser.mockResolvedValue(null)
+      const user = userEvent.setup()
+      renderUsersPage()
+
+      await openActions(user, /actions for riya sharma/i)
+      await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
+      await user.type(await screen.findByLabelText(/type "riya sharma" to confirm/i), 'riya sharma')
+      await user.click(screen.getByRole('button', { name: 'Delete permanently' }))
+
+      expect(await screen.findByText('No employees yet')).toBeInTheDocument()
+    })
+
+    it('shows the backend\'s refusal inline and keeps the dialog open', async () => {
+      const { ApiError } = await import('@/lib/api/errors')
+      signInAsAdmin()
+      listUsers.mockResolvedValue(listResponse([employee()]))
+      deleteUser.mockRejectedValue(
+        new ApiError({ kind: 'forbidden', message: 'Administrators cannot be deleted. Change their role first.', status: 403 }),
+      )
+      const user = userEvent.setup()
+      renderUsersPage()
+
+      await openActions(user, /actions for riya sharma/i)
+      await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
+      await user.type(await screen.findByLabelText(/type "riya sharma" to confirm/i), 'riya sharma')
+      await user.click(screen.getByRole('button', { name: 'Delete permanently' }))
+
+      expect(await screen.findByRole('alert')).toBeInTheDocument()
+      // Still open, so the admin can read it and cancel.
+      expect(screen.getByText(/delete riya sharma permanently\?/i)).toBeInTheDocument()
+    })
+
+    it('does nothing when cancelled', async () => {
+      signInAsAdmin()
+      listUsers.mockResolvedValue(listResponse([employee()]))
+      const user = userEvent.setup()
+      renderUsersPage()
+
+      await openActions(user, /actions for riya sharma/i)
+      await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
+      await user.click(await screen.findByRole('button', { name: 'Cancel' }))
+
+      await waitFor(() => expect(screen.queryByText(/delete riya sharma permanently/i)).not.toBeInTheDocument())
+      expect(deleteUser).not.toHaveBeenCalled()
+    })
   })
 })

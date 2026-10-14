@@ -61,6 +61,24 @@ class SelfDeactivationError(UserManagementError):
     """
 
 
+class SelfDeletionError(UserManagementError):
+    """A user may not delete their own account.
+
+    Refused outright: an administrator erasing themselves is never the intended
+    outcome, and another administrator can always do it for them.
+    """
+
+
+class AdministratorDeletionError(UserManagementError):
+    """A ``TENANT_ADMIN`` cannot be deleted - only employees and managers can.
+
+    Deletion is irreversible, so it is withheld from the one role that owns the
+    tenant. It also means the last-administrator invariant can never be broken by
+    a delete: an administrator who should go must first be demoted (which that
+    invariant already guards), and only then removed.
+    """
+
+
 class InvalidCurrentPasswordError(UserManagementError):
     """The supplied current password does not match."""
 

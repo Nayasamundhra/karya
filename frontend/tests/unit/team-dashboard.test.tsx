@@ -8,36 +8,18 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import TeamPage from '@/pages/manager/TeamPage'
-import type { TeamAttendanceResponse, TeamHoursResponse } from '@/lib/api/types'
+import type { TeamAttendanceResponse } from '@/lib/api/types'
 import { TestQueryProvider } from './helpers/testQueryClient'
 
-const { getTeamToday, getTeamHours } = vi.hoisted(() => ({
-  getTeamToday: vi.fn(),
-  getTeamHours: vi.fn(),
-}))
+const { getTeamToday } = vi.hoisted(() => ({ getTeamToday: vi.fn() }))
 
 vi.mock('@/lib/api/endpoints/attendance', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api/endpoints/attendance')>()),
   getTeamToday,
-  getTeamHours,
 }))
-
-function teamHoursResponse(): TeamHoursResponse {
-  return {
-    date: '2026-08-22',
-    week_start: '2026-08-17',
-    month_start: '2026-08-01',
-    summary: { total_today_hours: 5.5, total_week_hours: 5.5, total_month_hours: 5.5 },
-    employees: [
-      { user_id: 'user-1', name: 'Riya Sharma', employee_code: 'EMP-1', today_hours: 5.5, week_hours: 5.5, month_hours: 5.5 },
-      { user_id: 'user-2', name: 'Amit Kumar', employee_code: 'EMP-2', today_hours: 0, week_hours: 0, month_hours: 0 },
-      { user_id: 'user-3', name: 'Priya Nair', employee_code: 'EMP-3', today_hours: 0, week_hours: 0, month_hours: 0 },
-    ],
-  }
-}
 
 function teamResponse(): TeamAttendanceResponse {
   return {
@@ -86,17 +68,8 @@ function renderTeamPage() {
 }
 
 describe('TeamPage (manager dashboard)', () => {
-  beforeEach(() => {
-    // Every test below exercises the "today" section; the hours section
-    // (a second, independent query - see `TeamPage`) defaults to a valid
-    // response so it never causes an unrelated test to see one of its own
-    // states (loading/error) unless a test opts into that explicitly.
-    getTeamHours.mockResolvedValue(teamHoursResponse())
-  })
-
   afterEach(() => {
     getTeamToday.mockReset()
-    getTeamHours.mockReset()
   })
 
   it('shows accurate summary counts from the backend response, not recomputed locally', async () => {
@@ -173,23 +146,12 @@ describe('TeamPage (manager dashboard)', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument()
   })
 
-  it('shows the hours summary and per-employee breakdown', async () => {
+  it('has no hours-worked content on this page anymore — that lives on /team/hours', async () => {
     getTeamToday.mockResolvedValue(teamResponse())
     renderTeamPage()
 
-    const hours = await screen.findByRole('group', { name: 'Team hours worked' })
-    expect(within(hours).getAllByText('5h 30m')).toHaveLength(3) // today, week, month
-    expect(screen.getByRole('heading', { name: 'Hours worked' })).toBeInTheDocument()
-  })
-
-  it('the today section and the hours section fail independently', async () => {
-    getTeamToday.mockResolvedValue(teamResponse())
-    getTeamHours.mockRejectedValue(new Error('hours endpoint down'))
-    renderTeamPage()
-
-    // Today's data still renders...
-    expect(await screen.findByRole('table', { name: "Today's attendance" })).toBeInTheDocument()
-    // ...while only the hours section reports an error.
-    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    await screen.findByRole('table', { name: "Today's attendance" })
+    expect(screen.queryByRole('heading', { name: 'Team hours' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Team hours worked' })).not.toBeInTheDocument()
   })
 })

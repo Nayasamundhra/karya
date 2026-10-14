@@ -5,6 +5,7 @@
  * the same generic "not found" (§19/§23) — the backend already guarantees
  * this, `ErrorState`/`describeError` just render whatever it says.
  */
+import { PageHeader } from '@/components/layout/PageHeader'
 import { useParams } from 'react-router-dom'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
@@ -21,10 +22,11 @@ export default function EmployeeDetailPage() {
 
   return (
     <div className="flex max-w-2xl flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">Employee attendance</h1>
-        <p className="text-sm text-foreground-muted">Today's status and recent history for this employee.</p>
-      </div>
+      <PageHeader
+        eyebrow="Team"
+        title="Employee attendance"
+        description="Today's status and recent history for this employee."
+      />
 
       {isPending && (
         <Card>

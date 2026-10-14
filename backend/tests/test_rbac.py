@@ -200,7 +200,7 @@ def test_require_roles_rejects_an_empty_role_list() -> None:
 
 
 def test_role_mutation_is_confined_to_one_guarded_endpoint() -> None:
-    """Karya must expose exactly one way to change a role, and no way to delete.
+    """Karya must expose exactly one way to change a role, and exactly one delete.
 
     Through Phase 5 this asserted that *no* role-management surface existed.
     Phase 6 introduces one deliberately, so the guarantee is now narrower rather
@@ -217,9 +217,14 @@ def test_role_mutation_is_confined_to_one_guarded_endpoint() -> None:
     role_routes = sorted(path for path in paths if path.endswith("/role"))
     assert role_routes == ["/api/v1/users/{user_id}/role"]
 
-    # Nothing anywhere may delete: Karya keeps identities so history resolves.
-    for path, operations in paths.items():
-        assert "delete" not in operations, path
+    # Karya keeps identities so history resolves, so deletion is the exception and
+    # is confined to one route: an administrator permanently deleting an employee
+    # or manager (admin-only, never an admin, never themselves - see
+    # ``test_users_admin``). Any other path gaining a DELETE trips this.
+    deletable = sorted(
+        path for path, operations in paths.items() if "delete" in operations
+    )
+    assert deletable == ["/api/v1/users/{user_id}"]
 
     assert set(paths) == {
         "/health",
@@ -275,7 +280,10 @@ def test_role_mutation_is_confined_to_one_guarded_endpoint() -> None:
     }
     for path, operations in paths.items():
         for method in operations:
-            assert method.lower() in {"get", "post", "patch"}, (path, method)
+            allowed = {"get", "post", "patch"}
+            if path == "/api/v1/users/{user_id}":
+                allowed = allowed | {"delete"}  # the one deliberate delete
+            assert method.lower() in allowed, (path, method)
         # PUT would imply whole-resource replacement, which no endpoint offers.
         assert "put" not in operations
 

@@ -80,7 +80,7 @@ export function TeamAttendanceTable({ employees }: { employees: TeamAttendanceMe
             placeholder="Search employees…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="min-h-11 w-full rounded-md border border-border-strong bg-surface py-2 pl-9 pr-3 text-sm text-foreground placeholder:text-foreground-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+            className="min-h-11 w-full rounded-xl border border-border-strong bg-surface-raised py-2 pl-9 pr-3 text-sm text-foreground placeholder:text-foreground-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
           />
         </div>
         <div role="group" aria-label="Filter by attendance status" className="flex flex-wrap gap-2">

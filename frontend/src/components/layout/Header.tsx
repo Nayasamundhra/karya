@@ -26,7 +26,7 @@ export function Header() {
   const overflowItems = navItemsForRole(user?.role).filter((item) => !item.showInBottomNav)
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface px-4">
+    <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-surface px-5 sm:px-8 lg:px-12">
       <div className="flex items-center gap-2">
         {overflowItems.length > 0 && (
           <DropdownMenu>
@@ -46,7 +46,7 @@ export function Header() {
             </DropdownMenuContent>
           </DropdownMenu>
         )}
-        <span className="text-sm font-medium text-foreground-muted">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-foreground-muted">
           {isTenantLoading ? <Skeleton className="h-4 w-24" /> : tenant?.name}
         </span>
       </div>

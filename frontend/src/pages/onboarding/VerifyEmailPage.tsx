@@ -5,17 +5,19 @@ import { useForm } from 'react-hook-form'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { Button } from '@/components/ui/Button'
-import { Card, CardContent } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { FullScreenSpinner } from '@/components/layout/FullScreenSpinner'
 import {
   resendVerificationSchema,
   type ResendVerificationFormValues,
 } from '@/features/onboarding/onboardingSchema'
+import { brandInputClass, eyebrowClass } from '@/features/marketing/brandStyles'
+import { BrandMark } from '@/features/marketing/BrandMark'
 import { useResendVerification } from '@/features/onboarding/useResendVerification'
 import { useVerifyEmail } from '@/features/onboarding/useVerifyEmail'
 import { isApiError } from '@/lib/api/errors'
 import { describeError } from '@/lib/errors/describeError'
+import { cn } from '@/lib/utils/cn'
 
 /**
  * `describeError`'s generic 401 copy ("Your session has expired, sign in
@@ -29,6 +31,25 @@ import { describeError } from '@/lib/errors/describeError'
 function verificationErrorMessage(error: unknown): string {
   if (isApiError(error) && error.kind === 'unauthorized') return error.message
   return describeError(error).message
+}
+
+/**
+ * The page chrome for the two failure states below: brand header, one
+ * centred white card. The success path never renders it — it navigates
+ * straight to `/setup` — and the in-between "Verifying…" state stays the
+ * app's own full-screen spinner.
+ */
+function VerifyShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="theme-brand flex min-h-screen flex-col px-6 py-8 sm:px-12">
+      <BrandMark className="self-start" />
+      <div className="flex flex-1 items-center justify-center py-12">
+        <div className="flex w-full max-w-[440px] flex-col items-center gap-5 rounded-3xl border border-brand-indigo/10 bg-white p-8 text-center shadow-sm sm:p-10">
+          {children}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -74,47 +95,44 @@ export default function VerifyEmailPage() {
 
   if (!token) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-surface-sunken p-4">
-        <Card className="w-full max-w-sm">
-          <CardContent className="flex flex-col items-center gap-3 pt-6 text-center">
-            <span className="flex size-14 items-center justify-center rounded-full bg-danger-50">
-              <MailQuestion className="size-6 text-danger-600" aria-hidden="true" />
-            </span>
-            <div>
-              <h1 className="font-[family-name:var(--font-display)] text-lg font-semibold text-foreground">
-                Missing verification link
-              </h1>
-              <p className="mt-1.5 text-sm text-foreground-muted">
-                Open this page using the link from your email — it wasn't included this time.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <VerifyShell>
+        <span className="flex size-14 items-center justify-center rounded-full bg-danger-50">
+          <MailQuestion className="size-6 text-danger-600" aria-hidden="true" />
+        </span>
+        <div>
+          <span className={cn(eyebrowClass, 'text-brand-purple-deep')}>Verify email</span>
+          <h1 className="mt-3 font-brand text-3xl font-semibold leading-[1.1] tracking-tight">
+            Missing verification link
+          </h1>
+          <p className="mt-3 text-base leading-normal text-brand-indigo/65">
+            Open this page using the link from your email — it wasn't included this time.
+          </p>
+        </div>
+      </VerifyShell>
     )
   }
 
   if (verificationError) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-surface-sunken p-4">
-        <Card className="w-full max-w-sm">
-          <CardContent className="flex flex-col items-center gap-4 pt-6 text-center">
-            <span className="flex size-14 items-center justify-center rounded-full bg-warning-50">
-              <AlertTriangle className="size-6 text-warning-600" aria-hidden="true" />
-            </span>
-            <div>
-              <h1 className="font-[family-name:var(--font-display)] text-lg font-semibold text-foreground">
-                Verification failed
-              </h1>
-              <p className="mt-1.5 text-sm text-foreground-muted">{verificationErrorMessage(verificationError)}</p>
-            </div>
-            <ResendVerificationForm />
-            <Button variant="ghost" className="w-full" onClick={() => navigate('/onboarding')}>
-              Create a new organization
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+      <VerifyShell>
+        <span className="flex size-14 items-center justify-center rounded-full bg-warning-50">
+          <AlertTriangle className="size-6 text-warning-600" aria-hidden="true" />
+        </span>
+        <div>
+          <span className={cn(eyebrowClass, 'text-brand-purple-deep')}>Verify email</span>
+          <h1 className="mt-3 font-brand text-3xl font-semibold leading-[1.1] tracking-tight">
+            Verification failed
+          </h1>
+          <p className="mt-3 text-base leading-normal text-brand-indigo/65">
+            {verificationErrorMessage(verificationError)}
+          </p>
+        </div>
+        <div className="h-px w-full bg-brand-indigo/10" />
+        <ResendVerificationForm />
+        <Button variant="ghost" className="w-full" onClick={() => navigate('/onboarding')}>
+          Create a new organization
+        </Button>
+      </VerifyShell>
     )
   }
 
@@ -138,7 +156,7 @@ function ResendVerificationForm() {
 
   if (sent) {
     return (
-      <p className="text-sm text-foreground-muted">
+      <p className="text-sm text-brand-indigo/65">
         If that account needs verifying, a new link is on its way — check your inbox.
       </p>
     )
@@ -155,10 +173,11 @@ function ResendVerificationForm() {
       className="flex w-full flex-col gap-3 text-left"
       noValidate
     >
-      <p className="text-sm text-foreground-muted">Get a fresh link sent to you:</p>
+      <p className="text-sm text-brand-indigo/65">Get a fresh link sent to you:</p>
       <Input
         label="Organization ID"
         placeholder="acme"
+        className={brandInputClass}
         error={errors.organizationSlug?.message}
         {...register('organizationSlug')}
       />
@@ -166,13 +185,15 @@ function ResendVerificationForm() {
         label="Your email"
         type="email"
         autoComplete="email"
+        placeholder="you@company.com"
+        className={brandInputClass}
         error={errors.adminEmail?.message}
         {...register('adminEmail')}
       />
       {resendVerification.isError && (
         <p className="text-sm text-danger-600">{describeError(resendVerification.error).message}</p>
       )}
-      <Button type="submit" variant="secondary" isLoading={resendVerification.isPending}>
+      <Button type="submit" variant="brand" size="lg" isLoading={resendVerification.isPending}>
         {resendVerification.isPending ? 'Sending…' : 'Resend verification email'}
       </Button>
     </form>

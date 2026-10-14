@@ -15,21 +15,40 @@
  */
 @theme {
   --font-sans:
-    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    'Geist', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   /* Display face — large hero moments only (a check-in timer, the kiosk
      clock, a headline dashboard number). Never body text or dense UI: Inter
      already earns its keep there. See the redesign plan's "one typographic
      risk worth taking" note. */
-  --font-display: 'Outfit', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Geist', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  /* Public pages (landing, login, sign up) — the brand face. Signed-in app
+     chrome keeps Inter/Outfit until those screens are redesigned too. */
+  --font-brand: 'Geist', 'Inter', ui-sans-serif, system-ui, sans-serif;
 
   /* Accent — used for primary actions and focus rings only, never for large
      surfaces. A UI that is mostly neutral with one accent used sparingly
      reads as calmer than one where color is everywhere. */
-  --color-accent-50: #eef2ff;
-  --color-accent-100: #e0e7ff;
-  --color-accent-500: #6366f1;
-  --color-accent-600: #4f46e5;
-  --color-accent-700: #4338ca;
+  --color-accent-50: #f4ecff;
+  --color-accent-100: #e6d5ff;
+  --color-accent-500: #8b5cf6;
+  --color-accent-600: #6b3dc9;
+  --color-accent-700: #522a6f;
+
+  /* Brand palette (public pages) — cream and near-black surfaces with one
+     plum, one purple and one gold. Used via `bg-brand-*` / `text-brand-*`;
+     gradients are never page backgrounds. Light-only on purpose: the public
+     pages are a printed-paper look, forced light by `.theme-brand` below. */
+  --color-brand-cream: #faf9f6;
+  --color-brand-ink: #0a0a0b;
+  --color-brand-ink-raised: #151516;
+  --color-brand-indigo: #1e1b4b;
+  --color-brand-plum: #522a6f;
+  --color-brand-purple: #8b5cf6;
+  --color-brand-purple-deep: #6b3dc9;
+  --color-brand-lilac: #f4ecff;
+  --color-brand-gold: #fbcf4f;
+  --color-brand-gold-soft: #fff9e5;
+  --color-brand-gold-deep: #8a6300;
 
   /* Status — semantic, never referenced by hue name in component code. */
   --color-success-50: #f0fdf4;
@@ -37,10 +56,13 @@
   --color-success-600: #16a34a;
   --color-success-700: #15803d;
 
-  --color-warning-50: #fffbeb;
-  --color-warning-500: #f59e0b;
-  --color-warning-600: #d97706;
-  --color-warning-700: #b45309;
+  /* Warning is the brand gold: a forgotten/auto-closed checkout should read
+     as "look at this", not "error". 600/700 are dark enough for text on the
+     50 tint (WCAG AA). */
+  --color-warning-50: #fff9e5;
+  --color-warning-500: #fbcf4f;
+  --color-warning-600: #946500;
+  --color-warning-700: #8a6300;
 
   --color-danger-50: #fef2f2;
   --color-danger-500: #ef4444;
@@ -57,26 +79,32 @@
      spotlight below is for, and only in the two places it's allowed to
      appear. Kept clearly outside the success/warning/danger/info hue
      range so a role tint is never mistaken for a status. */
-  --color-employee-50: #ecfdfc;
-  --color-employee-500: #0ea5a5;
-  --color-employee-600: #0d9090;
-  --color-employee-700: #0f6a6a;
+  /* The brand is deliberately two-colour (purple + gold), so the three role
+     hues now share one purple family instead of teal / violet / indigo. The
+     per-role tokens stay (and stay separately addressable) so a future role
+     can diverge again without touching call sites; only their values
+     converged. Dark-mode lifts for the -50/-600/-700 steps are in the dark
+     blocks below. */
+  --color-employee-50: #f4ecff;
+  --color-employee-500: #8b5cf6;
+  --color-employee-600: #6b3dc9;
+  --color-employee-700: #522a6f;
 
-  --color-manager-50: #f5f0ff;
+  --color-manager-50: #f4ecff;
   --color-manager-500: #8b5cf6;
-  --color-manager-600: #7c3aed;
-  --color-manager-700: #6d28d9;
+  --color-manager-600: #6b3dc9;
+  --color-manager-700: #522a6f;
 
-  --color-admin-50: #eef2ff;
-  --color-admin-500: #4f46e5;
-  --color-admin-600: #4338ca;
-  --color-admin-700: #3730a3;
+  --color-admin-50: #f4ecff;
+  --color-admin-500: #8b5cf6;
+  --color-admin-600: #6b3dc9;
+  --color-admin-700: #522a6f;
 
   /* Spotlight — the one bold gradient moment in the app, reserved for
      exactly two surfaces: the employee check-in hero and the kiosk
      display. Never a section background, a card fill, or a button. */
-  --color-spotlight-from: #4f46e5;
-  --color-spotlight-to: #7c3aed;
+  --color-spotlight-from: #522a6f;
+  --color-spotlight-to: #6b3dc9;
 
   /* The kiosk's QR ring — a slow, ambient "still alive" pulse, never a
      loading indicator (the QR itself already has its own pulse skeleton
@@ -105,38 +133,73 @@
  * classes so call sites stay as `bg-surface`, `text-foreground`, etc.
  */
 :root {
-  --surface: #ffffff;
+  color-scheme: light;
+  /* Warm off-white, not pure white — `surface-raised` (cards) stays white,
+     so a card visibly floats above the page via a real tone difference
+     instead of relying on its border alone (the two were previously
+     identical, so light mode had zero tonal separation at all). Contrast
+     re-checked: foreground/foreground-muted both clear WCAG 2.2 AA against
+     this with more margin than they had against pure white. */
+  --surface: #faf9f6;
   --surface-raised: #ffffff;
-  --surface-sunken: #f8fafc;
-  --foreground: #0f172a;
-  --foreground-muted: #475569;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
+  --surface-sunken: #f3f1ec;
+  --foreground: #1e1b4b;
+  --foreground-muted: #5f5d7e;
+  --border: #e4e3e8;
+  --border-strong: #c9c8d3;
   --ring: var(--color-accent-500);
+  /* The primary action is near-black ink in light mode and white in dark —
+     it inverts with the theme rather than staying a fixed accent colour. */
+  --primary: #0a0a0b;
+  --primary-foreground: #ffffff;
+
+  /* Chart categorical palette (time-period identity, e.g. TeamHoursChart) —
+     validated against this app's surfaces via the `dataviz` skill's
+     validate_palette.js (lightness/chroma/CVD-separation/normal-vision all
+     pass on both this surface and the dark one below). Deliberately
+     separate from the role/brand hues above — those mean role identity in
+     UI chrome, a different job from time-period identity in a chart. */
+  --chart-color-today: #2a78d6;
+  --chart-color-week: #eb6834;
+  --chart-color-month: #1baf7a;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --surface: #0b1120;
-    --surface-raised: #111827;
-    --surface-sunken: #0f172a;
-    --foreground: #f1f5f9;
-    --foreground-muted: #94a3b8;
-    --border: #1f2937;
-    --border-strong: #334155;
-    --ring: var(--color-accent-500);
-  }
-}
-
+/* Dark mode is strictly opt-in: only `data-theme='dark'` (set by the toggle in
+ * the user menu, see src/lib/theme/theme.ts) turns it on. There is
+ * deliberately no `prefers-color-scheme` block — the OS setting must never
+ * flip the app dark on its own. */
 :root[data-theme='dark'] {
-  --surface: #0b1120;
-  --surface-raised: #111827;
-  --surface-sunken: #0f172a;
-  --foreground: #f1f5f9;
-  --foreground-muted: #94a3b8;
-  --border: #1f2937;
-  --border-strong: #334155;
-  --ring: var(--color-accent-500);
+  color-scheme: dark;
+  --surface: #0a0a0b;
+  --surface-raised: #151516;
+  --surface-sunken: #1e1e1f;
+  --foreground: #f5f5f7;
+  --foreground-muted: #a8a8ae;
+  --border: #2a2a2c;
+  --border-strong: #3d3d41;
+  --ring: #a78bfa;
+  --primary: #ffffff;
+  --primary-foreground: #0a0a0b;
+  /* Plum and deep purple are unreadable on ink: lift them to lilac. */
+  --color-accent-50: #241a3d;
+  --color-accent-100: #2e2150;
+  --color-accent-600: #a78bfa;
+  --color-accent-700: #c4b5fd;
+  --color-employee-50: #241a3d;
+  --color-employee-600: #a78bfa;
+  --color-employee-700: #c4b5fd;
+  --color-manager-50: #241a3d;
+  --color-manager-600: #a78bfa;
+  --color-manager-700: #c4b5fd;
+  --color-admin-50: #241a3d;
+  --color-admin-600: #a78bfa;
+  --color-admin-700: #c4b5fd;
+  --color-warning-50: #2b2208;
+  --color-warning-600: #fbcf4f;
+  --color-warning-700: #fbcf4f;
+  --chart-color-today: #3987e5;
+  --chart-color-week: #d95926;
+  --chart-color-month: #199e70;
 }
 
 @theme inline {
@@ -148,6 +211,45 @@
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
   --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+}
+
+/* Forces the light brand look on a public page regardless of the OS colour
+ * scheme. Tailwind's `--color-*` tokens above are declared `inline` on :root,
+ * so redefining `--surface` etc. in a descendant would not reach them —
+ * the `--color-*` ones are what the utilities actually read. */
+.theme-brand {
+  color-scheme: light;
+  --surface: #faf9f6;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f2ede4;
+  --foreground: #1e1b4b;
+  --foreground-muted: #5f5d7e;
+  --border: #e4e3e8;
+  --border-strong: #c9c8d3;
+  --ring: #8b5cf6;
+  --color-surface: #faf9f6;
+  --color-surface-raised: #ffffff;
+  --color-surface-sunken: #f2ede4;
+  --color-foreground: #1e1b4b;
+  --color-foreground-muted: #5f5d7e;
+  --color-border: #e4e3e8;
+  --color-border-strong: #c9c8d3;
+  --color-ring: #8b5cf6;
+  background-color: #faf9f6;
+  color: #1e1b4b;
+  font-family: var(--font-brand);
+}
+
+/* The wrapper above only paints its own box; when the user has chosen dark the
+ * <body> behind it is still dark (edges, overscroll, short pages). Public
+ * pages are light all the way down. */
+html:has(.theme-brand) {
+  color-scheme: light;
+}
+body:has(.theme-brand) {
+  background-color: #faf9f6;
 }
 
 @layer base {

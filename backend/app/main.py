@@ -70,8 +70,11 @@ refused on its merits - outside the geofence, QR already used, already checked i
 returns **200** with `verified: false` or `success: false` and a machine-readable
 `reason`. 4xx is reserved for requests that could not be processed at all.
 
-**Nothing is ever deleted.** There is no `DELETE` method anywhere in this API.
-Users move between `ACTIVE` and `INACTIVE`; attendance events are immutable.
+**Attendance is never edited or deleted on its own.** Users normally move between
+`ACTIVE` and `INACTIVE` and keep their history; attendance events are immutable. The
+single exception is `DELETE /users/{user_id}`, which a tenant administrator can use
+to permanently erase an employee or manager together with their events - never an
+administrator, never themselves - and which leaves a `USER_DELETED` audit row.
 """
 
 TAGS_METADATA = [

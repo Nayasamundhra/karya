@@ -5,6 +5,7 @@
  * this never fetches the whole tenant just to filter client-side, and never
  * issues a request per keystroke.
  */
+import { PageHeader } from '@/components/layout/PageHeader'
 import { useState } from 'react'
 import { Plus } from 'lucide-react'
 
@@ -41,16 +42,17 @@ export default function UsersPage() {
 
   return (
     <div className="flex max-w-4xl flex-col gap-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Manage employees</h1>
-          <p className="text-sm text-foreground-muted">Create, edit, and manage roles for people in your tenant.</p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" aria-hidden="true" />
-          Add employee
-        </Button>
-      </div>
+      <PageHeader
+        eyebrow="Admin"
+        title="Manage employees"
+        description="Create, edit, and manage roles for people in your tenant."
+        actions={
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" aria-hidden="true" />
+            Add employee
+          </Button>
+        }
+      />
 
       <div className="flex flex-col gap-3 sm:flex-row">
         <Input

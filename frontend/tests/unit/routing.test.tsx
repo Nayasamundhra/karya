@@ -100,8 +100,16 @@ describe('routing and role-based access', () => {
 
   it('redirects an unauthenticated visitor from a protected route to /login', async () => {
     useAuthStore.setState({ status: 'unauthenticated', user: null, accessToken: null, accessTokenExpiresAt: null })
+    renderAt('/team')
+    expect(await screen.findByRole('heading', { name: /welcome back/i })).toBeInTheDocument()
+  })
+
+  it('shows the public landing page, not a redirect, to a signed-out visitor at /', async () => {
+    useAuthStore.setState({ status: 'unauthenticated', user: null, accessToken: null, accessTokenExpiresAt: null })
     renderAt('/')
-    expect(await screen.findByRole('heading', { name: /sign in to karya/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: /attendance you can trust/i })).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: /^log in$/i })[0]).toHaveAttribute('href', '/login')
+    expect(screen.getAllByRole('link', { name: /^sign up$/i })[0]).toHaveAttribute('href', '/onboarding')
   })
 
   it('lets STAFF reach the home page, and shows only STAFF-appropriate navigation', async () => {

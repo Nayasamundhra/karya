@@ -133,8 +133,8 @@ async function login(page: import('@playwright/test').Page) {
   await page.goto('/login')
   await page.getByLabel('Organization ID').fill('acme')
   await page.getByLabel('Email').fill('vikram@acme.com')
-  await page.getByLabel('Password').fill('correct-password-123')
-  await page.getByRole('button', { name: 'Sign in' }).click()
+  await page.getByLabel('Password', { exact: true }).fill('correct-password-123')
+  await page.getByRole('button', { name: 'Log in' }).click()
 }
 
 function teamTodayResponse() {
@@ -240,7 +240,24 @@ test.describe('manager dashboard (desktop table)', () => {
     await expect(page.getByRole('table', { name: "Today's attendance" }).getByText('Riya Sharma')).toBeVisible()
     await expect(page.getByRole('table', { name: "Today's attendance" }).getByText('Amit Kumar')).toBeVisible()
     await expect(page.getByRole('table', { name: "Today's attendance" }).getByText('Priya Nair')).toBeVisible()
+    // Hours moved to its own page (§ redundancy fix) — not shown here.
+    await expect(page.getByText('Hours Today')).toHaveCount(0)
+  })
+
+  test('opens the Hours page from the sidebar and sees the team hours summary, chart and breakdown', async ({ page }) => {
+    await mockAuth(page, 'MANAGER')
+    await page.route('**/api/v1/attendance/team/today**', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(teamTodayResponse()) })
+    })
+    await mockTeamHours(page)
+
+    await login(page)
+    await page.getByRole('navigation', { name: 'Primary' }).first().getByRole('link', { name: 'Hours' }).click()
+
+    await expect(page.getByRole('heading', { name: 'Team hours' })).toBeVisible()
     await expect(page.getByText('Hours Today')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'By employee' })).toBeVisible()
+    await expect(page.getByRole('table', { name: 'Hours worked by employee' }).getByText('Riya Sharma')).toBeVisible()
   })
 
   test('filters today\'s roster by status without another network request', async ({ page }) => {

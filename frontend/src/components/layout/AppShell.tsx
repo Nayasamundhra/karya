@@ -24,7 +24,7 @@ export function AppShell() {
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">
           <Header />
-          <main id="main-content" className="flex-1 overflow-x-hidden p-4 pb-20 sm:p-6 lg:pb-6">
+          <main id="main-content" className="flex-1 overflow-x-hidden px-5 pb-24 pt-6 sm:px-8 lg:px-12 lg:pb-12 lg:pt-10">
             <Outlet />
           </main>
         </div>

@@ -34,7 +34,7 @@ export function Toaster() {
             duration={5000}
             onOpenChange={(open) => !open && dismiss(t.id)}
             className={cn(
-              'flex items-start gap-3 rounded-md border p-4 shadow-md',
+              'flex items-start gap-3 rounded-2xl border p-4 shadow-md',
               VARIANT_CLASSES[t.variant],
             )}
           >

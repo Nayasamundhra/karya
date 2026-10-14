@@ -1,5 +1,4 @@
-import { Card, CardContent } from '@/components/ui/Card'
-import { Skeleton } from '@/components/ui/Skeleton'
+import { StatCard, StatCardGrid, StatCardGridSkeleton } from '@/components/ui/StatCard'
 import { formatHours } from '@/features/attendance/formatters'
 import type { TeamHoursResponse } from '@/lib/api/types'
 
@@ -17,30 +16,14 @@ export function TeamHoursCards({ summary }: { summary: TeamHoursResponse['summar
   ]
 
   return (
-    <div role="group" aria-label="Team hours worked" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <StatCardGrid ariaLabel="Team hours worked" columns={3}>
       {cards.map((card) => (
-        <Card key={card.label}>
-          <CardContent className="flex flex-col gap-1 p-4">
-            <p className="text-2xl font-semibold text-foreground">{formatHours(card.value)}</p>
-            <p className="text-xs font-medium text-foreground-muted">{card.label}</p>
-          </CardContent>
-        </Card>
+        <StatCard key={card.label} label={card.label} value={formatHours(card.value)} hue="manager" />
       ))}
-    </div>
+    </StatCardGrid>
   )
 }
 
 export function TeamHoursCardsSkeleton() {
-  return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-      {Array.from({ length: 3 }, (_, i) => (
-        <Card key={i}>
-          <CardContent className="flex flex-col gap-2 p-4">
-            <Skeleton className="h-8 w-16" />
-            <Skeleton className="h-3 w-24" />
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  )
+  return <StatCardGridSkeleton count={3} columns={3} />
 }

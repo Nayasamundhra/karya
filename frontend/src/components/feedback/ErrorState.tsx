@@ -20,7 +20,7 @@ export function ErrorState({ error, onRetry, className }: ErrorStateProps) {
   return (
     <div
       role="alert"
-      className={cn('flex flex-col items-center gap-3 rounded-lg border border-danger-500/30 bg-danger-50 p-8 text-center', className)}
+      className={cn('flex flex-col items-center gap-3 rounded-3xl border border-danger-500/30 bg-danger-50 p-8 text-center', className)}
     >
       <AlertCircle className="size-8 text-danger-600" aria-hidden="true" />
       <div className="flex flex-col gap-1">

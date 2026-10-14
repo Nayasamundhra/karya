@@ -1,3 +1,4 @@
+import { PageHeader } from '@/components/layout/PageHeader'
 import { UserCog, Users } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -7,8 +8,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { EmployeeHome } from '@/features/attendance/EmployeeHome'
 import { useAuth } from '@/features/auth/useAuth'
 import { useSetupStatus } from '@/features/onboarding/useSetupStatus'
-import { useTenant } from '@/features/tenant/useTenant'
+import { TeamSnapshotCard } from '@/features/team/TeamSnapshotCard'
 import type { UserRole } from '@/lib/api/types'
+import { roleLabel } from '@/lib/utils/roleLabel'
 
 /** STAFF is handled by `EmployeeHome` below — it has an actual job on this
  * page (check in/out), not a pointer to one, so it isn't part of this map. */
@@ -31,7 +33,7 @@ const NEXT_STEP: Record<PointerRole, NextStep> = {
   },
   TENANT_ADMIN: {
     icon: UserCog,
-    text: 'Manage employees, your organization settings, and office displays.',
+    text: 'Manage employees and your organization settings.',
     to: '/admin/users',
     cta: 'Manage employees',
   },
@@ -42,25 +44,19 @@ const KNOWN_ROLES: readonly UserRole[] = ['STAFF', 'MANAGER', 'TENANT_ADMIN', 'S
 
 export default function HomePage() {
   const { user } = useAuth()
-  const { data: tenant } = useTenant()
   if (!user) return null
 
   const role = isKnownRole(user.role) ? user.role : 'STAFF'
 
   if (role === 'STAFF') {
-    return <EmployeeHome name={user.name} tenantName={tenant?.name} />
+    return <EmployeeHome name={user.name} />
   }
 
   const next = NEXT_STEP[role]
 
   return (
     <div className="flex max-w-2xl flex-col gap-4">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">Welcome, {user.name}</h1>
-        <p className="text-sm text-foreground-muted">
-          Signed in as {roleLabel(role)} · {user.employee_code}
-        </p>
-      </div>
+      <PageHeader eyebrow={`${roleLabel(role)} · ${user.employee_code}`} title={`Welcome, ${user.name}.`} />
       {role === 'TENANT_ADMIN' && <SetupNudge />}
       <Card>
         <CardHeader>
@@ -68,7 +64,7 @@ export default function HomePage() {
           <CardDescription>{next.text}</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-between gap-3 rounded-md bg-surface-sunken p-4 text-sm text-foreground-muted">
+          <div className="flex items-center justify-between gap-3 rounded-2xl bg-surface-sunken p-4 text-sm text-foreground-muted">
             <div className="flex items-center gap-3">
               <next.icon className="size-5 shrink-0" aria-hidden="true" />
               <span>{next.text}</span>
@@ -81,6 +77,7 @@ export default function HomePage() {
           </div>
         </CardContent>
       </Card>
+      {(role === 'MANAGER' || role === 'TENANT_ADMIN') && <TeamSnapshotCard />}
     </div>
   )
 }
@@ -109,19 +106,4 @@ function SetupNudge() {
 
 function isKnownRole(role: string): role is UserRole {
   return (KNOWN_ROLES as readonly string[]).includes(role)
-}
-
-function roleLabel(role: UserRole): string {
-  switch (role) {
-    case 'TENANT_ADMIN':
-      return 'Tenant Admin'
-    case 'MANAGER':
-      return 'Manager'
-    case 'STAFF':
-      // Product-facing terminology says "Employee", not "Staff" (CLAUDE.md) —
-      // the `STAFF` role identifier itself is the backend's, left unchanged.
-      return 'Employee'
-    case 'SUPER_ADMIN':
-      return 'Super Admin'
-  }
 }

@@ -411,6 +411,7 @@ Authorized Operation        require_roles(...) + tenant_scoped_select(...)
 | `PATCH` | `/api/v1/users/{user_id}/role` | TENANT_ADMIN | Change a role (Phase 6) |
 | `POST` | `/api/v1/users/{user_id}/activate` | TENANT_ADMIN | Reactivate (Phase 6) |
 | `POST` | `/api/v1/users/{user_id}/deactivate` | TENANT_ADMIN | Deactivate (Phase 6) |
+| `DELETE` | `/api/v1/users/{user_id}` | TENANT_ADMIN | **Permanently delete** an employee or manager and their attendance history (never an admin, never yourself) |
 | `GET` | `/api/v1/users/{user_id}/audit` | TENANT_ADMIN | Lifecycle audit (Phase 6) |
 | `POST` | `/api/v1/onboarding/tenants` | — (public) | Create a tenant + its first (unverified) admin (Phase 11) |
 | `POST` | `/api/v1/onboarding/verify-email` | — (public, token in body) | Activate the admin and sign in (Phase 11) |
@@ -1214,6 +1215,7 @@ get created, managed and retired — and it adds **no tables and no migration**.
 | `PATCH` | `/api/v1/users/{user_id}/role` | 403 | 403 | ✅ |
 | `POST` | `/api/v1/users/{user_id}/activate` | 403 | 403 | ✅ |
 | `POST` | `/api/v1/users/{user_id}/deactivate` | 403 | 403 | ✅ |
+| `DELETE` | `/api/v1/users/{user_id}` | 403 | 403 | ✅ (employees and managers only) |
 | `GET` | `/api/v1/users/{user_id}/audit` | 403 | 403 | ✅ |
 
 **MANAGER deliberately gets no user-management powers.** Managers see attendance;
@@ -1236,9 +1238,31 @@ and Karya's administration is tenant-scoped.
             └───── attendance history and audit trail persist ──┘
 ```
 
-**Nothing is ever deleted.** Karya is an attendance and audit system: a deleted
-identity would leave historical events pointing at nobody. There is no `DELETE`
-route anywhere in the API, and a test asserts that.
+**Deactivation never deletes; deletion is a separate, deliberate act.** Karya is an
+attendance and audit system, so the normal way to retire someone is to deactivate
+them — a deleted identity would leave historical events pointing at nobody, which
+is why deactivation keeps everything.
+
+`DELETE /api/v1/users/{user_id}` exists for the case where the person *and* their
+records genuinely have to go. It is irreversible, `TENANT_ADMIN`-only, and:
+
+- **only deletes employees and managers.** A `TENANT_ADMIN` cannot be deleted (demote
+  them first — the last-admin rule already guards that), and nobody can delete
+  themselves. A cross-tenant id is a 404, as everywhere.
+- **deletes the person's attendance history with them.** `attendance_events.user_id`
+  stays `ON DELETE RESTRICT` on purpose, so the service deletes the events
+  explicitly in the same transaction rather than the database cascading silently;
+  refresh sessions and verification tokens go via their `CASCADE`.
+- **leaves a `USER_DELETED` audit row** holding the person's name, email, employee
+  code, role, who deleted them and how many events went. It is the only copy of that
+  identity left. Earlier audit rows *about* the person survive (`target_id` is an
+  untyped UUID, not a foreign key); rows they *wrote* keep their content but lose the
+  actor link (`ON DELETE SET NULL`).
+- **is race-safe against attendance.** It locks the user row `FOR UPDATE` — the same
+  lock every check-in/out takes — so a check-in racing a delete finds nobody and
+  refuses cleanly instead of inserting an event that points at no one
+  (`test_users_concurrency.py`, with a naive control that hits the foreign key).
+- **frees the email and employee code** for reuse, unlike deactivation.
 
 Deactivation takes effect immediately — the authentication dependency re-reads
 `users.status` on every request, so an unexpired access token stops working at

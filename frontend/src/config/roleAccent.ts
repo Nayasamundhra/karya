@@ -23,15 +23,15 @@ export interface RoleNavClasses {
 
 const ROLE_NAV_CLASSES: Record<UserRole, RoleNavClasses> = {
   STAFF: {
-    sidebarActive: 'bg-employee-50 text-employee-700 hover:bg-employee-50 hover:text-employee-700',
+    sidebarActive: 'bg-employee-50 font-semibold text-employee-700 hover:bg-employee-50 hover:text-employee-700',
     bottomNavActive: 'text-employee-700',
   },
   MANAGER: {
-    sidebarActive: 'bg-manager-50 text-manager-700 hover:bg-manager-50 hover:text-manager-700',
+    sidebarActive: 'bg-manager-50 font-semibold text-manager-700 hover:bg-manager-50 hover:text-manager-700',
     bottomNavActive: 'text-manager-700',
   },
   TENANT_ADMIN: {
-    sidebarActive: 'bg-admin-50 text-admin-700 hover:bg-admin-50 hover:text-admin-700',
+    sidebarActive: 'bg-admin-50 font-semibold text-admin-700 hover:bg-admin-50 hover:text-admin-700',
     bottomNavActive: 'text-admin-700',
   },
   // No dedicated color for a platform role with no screens of its own yet

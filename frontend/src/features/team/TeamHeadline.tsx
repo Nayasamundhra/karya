@@ -17,7 +17,7 @@ export function TeamHeadline({ summary }: { summary: TeamAttendanceResponse['sum
     <Card>
       <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:gap-6 sm:p-6">
         <div className="flex items-baseline gap-2">
-          <span className="font-[family-name:var(--font-display)] text-4xl font-bold text-manager-700 sm:text-5xl">
+          <span className="font-[family-name:var(--font-display)] text-5xl font-semibold leading-none tracking-tight text-manager-700 sm:text-6xl">
             {checkedIn}
           </span>
           <span className="text-lg text-foreground-muted">of {total} checked in</span>
@@ -28,7 +28,7 @@ export function TeamHeadline({ summary }: { summary: TeamAttendanceResponse['sum
             <span
               key={i}
               aria-hidden="true"
-              className={filled ? 'h-2.5 w-7 rounded-sm bg-manager-500' : 'h-2.5 w-7 rounded-sm bg-border'}
+              className={filled ? 'h-2.5 w-7 rounded-full bg-manager-500' : 'h-2.5 w-7 rounded-full bg-border'}
             />
           ))}
         </div>

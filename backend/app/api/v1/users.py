@@ -5,7 +5,8 @@ Two audiences, two authorization levels:
 * **Self-service** (`/users/me...`) - any authenticated active user, acting only
   on themselves. There is no user id in these paths, so nothing to redirect.
 * **Administration** (`/users`, `/users/{user_id}...`) - `TENANT_ADMIN` only,
-  acting only within their own tenant.
+  acting only within their own tenant. This includes the one irreversible
+  operation, `DELETE /users/{user_id}`, limited to employees and managers.
 
 `MANAGER` deliberately gets **no** user-management powers. Managers see attendance;
 tenant admins own identity and lifecycle. Keeping that separation means a manager
@@ -479,6 +480,56 @@ def activate_user(
     silently clearing one would lock the person out instead.
     """
     return _set_status(session, current_user, user_id, UserStatus.ACTIVE)
+
+
+@router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete an employee or manager",
+    dependencies=[ADMIN_WRITE_RATE_LIMIT],
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {
+            "description": (
+                "Insufficient permissions, deleting yourself, or deleting an "
+                "administrator"
+            )
+        },
+        404: {"description": _USER_NOT_FOUND},
+        **RATE_LIMITED_RESPONSE,
+    },
+)
+def delete_user(
+    user_id: uuid.UUID, session: DbSession, current_user: TenantAdmin
+) -> None:
+    """Permanently delete an employee or manager and their attendance history.
+
+    **Irreversible.** Deactivation (``POST /users/{id}/deactivate``) is the
+    reversible way to retire an account and keeps history; this removes the person
+    and every attendance event recorded for them. Only ``STAFF`` and ``MANAGER``
+    accounts can be deleted - a ``TENANT_ADMIN`` cannot, and nobody can delete
+    themselves. An id in another tenant returns 404, like every other lookup.
+
+    A ``USER_DELETED`` audit row records who was removed, by whom, and how many
+    attendance events went with them.
+    """
+    try:
+        users_service.delete_user(
+            session,
+            tenant_id=current_user.tenant_id,
+            actor=current_user,
+            user_id=user_id,
+        )
+    except errors.UserNotFoundError as exc:
+        raise _not_found() from exc
+    except errors.SelfDeletionError as exc:
+        raise _forbidden("You cannot delete your own account") from exc
+    except errors.AdministratorDeletionError as exc:
+        raise _forbidden(
+            "Administrators cannot be deleted. Change their role first."
+        ) from exc
+
+    session.commit()
 
 
 @router.get(

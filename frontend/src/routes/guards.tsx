@@ -7,18 +7,29 @@
  * what this file does. Nothing here should ever be mistaken for that
  * boundary.
  */
+import type { ReactNode } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
 import { useAuth } from '@/features/auth/useAuth'
 import type { UserRole } from '@/lib/api/types'
 import { FullScreenSpinner } from '@/components/layout/FullScreenSpinner'
 
-export function RequireAuth() {
+/**
+ * `anonymousRoot`, when given, is what a signed-out visitor sees at exactly
+ * `/` instead of being bounced to `/login` — the public landing page lives at
+ * the same URL as the signed-in dashboard, so it has to be chosen here, by
+ * auth state, rather than by a second route that would collide with the
+ * index route. Every other protected path still redirects to `/login`.
+ */
+export function RequireAuth({ anonymousRoot }: { anonymousRoot?: ReactNode } = {}) {
   const { isAuthenticated, isLoading } = useAuth()
   const location = useLocation()
 
   if (isLoading) return <FullScreenSpinner label="Checking your session…" />
-  if (!isAuthenticated) return <Navigate to="/login" state={{ from: location }} replace />
+  if (!isAuthenticated) {
+    if (anonymousRoot && location.pathname === '/') return <>{anonymousRoot}</>
+    return <Navigate to="/login" state={{ from: location }} replace />
+  }
   return <Outlet />
 }
 

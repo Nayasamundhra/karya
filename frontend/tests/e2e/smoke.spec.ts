@@ -9,14 +9,21 @@ import { expect, test } from '@playwright/test'
  */
 
 test.describe('unauthenticated visitor', () => {
-  test('is redirected from the app to the login page', async ({ page }) => {
+  test('sees the public landing page at /, with log in and sign up', async ({ page }) => {
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'Sign in to Karya' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: 'Attendance you can trust.' })).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Log in' }).first()).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Sign up' }).first()).toBeVisible()
+  })
+
+  test('is redirected from a protected route to the login page', async ({ page }) => {
+    await page.goto('/attendance')
+    await expect(page.getByRole('heading', { name: 'Welcome back.' })).toBeVisible()
   })
 
   test('is redirected away from an admin-only route without ever seeing its content', async ({ page }) => {
     await page.goto('/admin/users')
-    await expect(page.getByRole('heading', { name: 'Sign in to Karya' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Welcome back.' })).toBeVisible()
     await expect(page.getByText('Manage employees')).toHaveCount(0)
   })
 
@@ -33,8 +40,8 @@ test.describe('unauthenticated visitor', () => {
     await page.goto('/login')
     await page.getByLabel('Organization ID').fill('acme')
     await page.getByLabel('Email').fill('riya@acme.com')
-    await page.getByLabel('Password').fill('wrong-password-123')
-    await page.getByRole('button', { name: 'Sign in' }).click()
+    await page.getByLabel('Password', { exact: true }).fill('wrong-password-123')
+    await page.getByRole('button', { name: 'Log in' }).click()
 
     await expect(page.getByRole('alert')).toHaveText('Invalid credentials')
   })
@@ -47,7 +54,7 @@ test.describe('unauthenticated visitor', () => {
     })
 
     await page.goto('/login')
-    await page.getByRole('button', { name: 'Sign in' }).click()
+    await page.getByRole('button', { name: 'Log in' }).click()
 
     await expect(page.getByText('Enter your organization ID')).toBeVisible()
     expect(loginCalled).toBe(false)
@@ -127,8 +134,8 @@ test.describe('authenticated session', () => {
     await page.goto('/login')
     await page.getByLabel('Organization ID').fill('acme')
     await page.getByLabel('Email').fill('riya@acme.com')
-    await page.getByLabel('Password').fill('correct-password-123')
-    await page.getByRole('button', { name: 'Sign in' }).click()
+    await page.getByLabel('Password', { exact: true }).fill('correct-password-123')
+    await page.getByRole('button', { name: 'Log in' }).click()
 
     await expect(
       page.getByRole('heading', { name: /good (morning|afternoon|evening), riya/i }),

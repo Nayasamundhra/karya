@@ -1,67 +1,40 @@
 /**
  * The manager/tenant-admin dashboard (§3–§5) — today's attendance across the
- * tenant, front and center. Originally scoped as deliberately operational,
- * not analytical (see CLAUDE.md's Phase 10 non-goals) — the hours-worked
- * section below is a since-confirmed exception to that, not an oversight;
- * it stays a plain running total, not a chart or trend line. Two requests
- * back this page: `GET /attendance/team/today` and `GET /attendance/team/hours`,
- * loaded and shown independently so a slow one never blocks the other.
+ * tenant, front and center. Attendance-only: hours worked lives on its own
+ * page (`TeamHoursPage`, `/team/hours`) rather than stacked below this one —
+ * the two used to share a page and show the same employees twice, once per
+ * section, which read as redundant rather than thorough.
  */
+import { PageHeader } from '@/components/layout/PageHeader'
 import { ErrorState } from '@/components/feedback/ErrorState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { TeamAttendanceTable } from '@/features/team/TeamAttendanceTable'
 import { TeamHeadline } from '@/features/team/TeamHeadline'
-import { TeamHoursCards, TeamHoursCardsSkeleton } from '@/features/team/TeamHoursCards'
-import { TeamHoursTable } from '@/features/team/TeamHoursTable'
 import { TeamSummaryCards, TeamSummaryCardsSkeleton } from '@/features/team/TeamSummaryCards'
-import { useTeamHours } from '@/features/team/useTeamHours'
 import { useTeamToday } from '@/features/team/useTeamToday'
 
 export default function TeamPage() {
-  const today = useTeamToday()
-  const hours = useTeamHours()
+  const { data, isPending, isError, error, refetch } = useTeamToday()
 
   return (
     <div className="flex max-w-4xl flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">Team attendance</h1>
-        <p className="text-sm text-foreground-muted">Who's working today, and how far along they are.</p>
-      </div>
+      <PageHeader eyebrow="Today" title="Team attendance" description="Who's working today, and how far along they are." />
 
-      {today.isPending && (
+      {isPending && (
         <>
-          <Skeleton className="h-24 w-full rounded-lg" />
+          <Skeleton className="h-24 w-full rounded-3xl" />
           <TeamSummaryCardsSkeleton />
         </>
       )}
-      {today.isError && <ErrorState error={today.error} onRetry={today.refetch} />}
+      {isError && <ErrorState error={error} onRetry={refetch} />}
 
-      {today.data && (
+      {data && (
         <>
-          <TeamHeadline summary={today.data.summary} />
-          <TeamSummaryCards summary={today.data.summary} />
-          <TeamAttendanceTable employees={today.data.employees} />
+          <TeamHeadline summary={data.summary} />
+          <TeamSummaryCards summary={data.summary} />
+          <TeamAttendanceTable employees={data.employees} />
         </>
       )}
-
-      <div className="flex flex-col gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-foreground">Hours worked</h2>
-          <p className="text-sm text-foreground-muted">
-            An open shift counts up to now; it isn't final until the employee checks out.
-          </p>
-        </div>
-
-        {hours.isPending && <TeamHoursCardsSkeleton />}
-        {hours.isError && <ErrorState error={hours.error} onRetry={hours.refetch} />}
-
-        {hours.data && (
-          <>
-            <TeamHoursCards summary={hours.data.summary} />
-            <TeamHoursTable employees={hours.data.employees} />
-          </>
-        )}
-      </div>
     </div>
   )
 }

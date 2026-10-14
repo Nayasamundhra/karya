@@ -1,8 +1,9 @@
-import type { ComponentType } from 'react'
+import { lazy, Suspense, type ComponentType } from 'react'
 import type { RouteObject } from 'react-router-dom'
 import { createBrowserRouter } from 'react-router-dom'
 
 import { AppShell } from '@/components/layout/AppShell'
+import { FullScreenSpinner } from '@/components/layout/FullScreenSpinner'
 import { RedirectIfAuthenticated, RequireAuth, RequireRole } from '@/routes/guards'
 
 /**
@@ -19,6 +20,18 @@ function lazyRoute(importer: () => Promise<{ default: ComponentType }>) {
     return { Component }
   }
 }
+
+/**
+ * What a signed-out visitor sees at `/` (see `RequireAuth`'s `anonymousRoot`).
+ * `React.lazy` + `Suspense` here because this sits outside the data router's
+ * own `lazy()` route field — a signed-in user's bundle never loads it.
+ */
+const LandingPage = lazy(() => import('@/pages/LandingPage'))
+const landingRoot = (
+  <Suspense fallback={<FullScreenSpinner label="Loading…" />}>
+    <LandingPage />
+  </Suspense>
+)
 
 /**
  * The route tree, exported separately from the browser router instance
@@ -67,7 +80,7 @@ export const routes: RouteObject[] = [
     },
   },
   {
-    element: <RequireAuth />,
+    element: <RequireAuth anonymousRoot={landingRoot} />,
     children: [
       {
         element: <AppShell />,
@@ -87,6 +100,7 @@ export const routes: RouteObject[] = [
             element: <RequireRole roles={['MANAGER', 'TENANT_ADMIN']} />,
             children: [
               { path: 'team', lazy: lazyRoute(() => import('@/pages/manager/TeamPage')) },
+              { path: 'team/hours', lazy: lazyRoute(() => import('@/pages/manager/TeamHoursPage')) },
               { path: 'team/:userId', lazy: lazyRoute(() => import('@/pages/manager/EmployeeDetailPage')) },
             ],
           },

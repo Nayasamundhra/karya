@@ -9,6 +9,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import * as usersApi from '@/lib/api/endpoints/users'
 import type { RoleUpdateRequest, UserCreateRequest, UserUpdateRequest } from '@/lib/api/types'
 import { adminUserKeys } from '@/features/users/admin/queryKeys'
+import { teamKeys } from '@/features/team/queryKeys'
 
 function useInvalidateEmployeeList() {
   const queryClient = useQueryClient()
@@ -46,6 +47,21 @@ export function useActivateEmployee() {
   return useMutation({
     mutationFn: (userId: string) => usersApi.activateUser(userId),
     onSuccess: invalidate,
+  })
+}
+
+/** Deleting someone also changes every manager view built from them (today's
+ * roster, hours, a per-employee page), so those are invalidated too — unlike
+ * the other mutations here, which only touch the employee list. */
+export function useDeleteEmployee() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (userId: string) => usersApi.deleteUser(userId),
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: adminUserKeys.all }),
+        queryClient.invalidateQueries({ queryKey: teamKeys.all }),
+      ]),
   })
 }
 

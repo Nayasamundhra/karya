@@ -1,9 +1,10 @@
 /**
  * The employee home's reason for existing: check in/out is the page, not a
  * link off of it (see the redesign plan's diagnosis of the old HomePage).
- * This is the one place the gradient "spotlight" surface is allowed to
- * appear (`styles/index.css`'s `--color-spotlight-*`); everywhere else
- * color stays restrained.
+ * This is the one dark, high-contrast surface on a signed-in screen (near-
+ * black ink, a gold status label, a white pill action); everywhere else
+ * colour stays restrained. It is ink in both light and dark mode on purpose —
+ * a fixed brand surface, not a themed one.
  *
  * Still reads today's state from the backend's own `AttendanceTodayResponse`
  * exactly like `AttendanceStatusCard` does — no verdict is computed here,
@@ -35,26 +36,22 @@ export function CheckInHero({ today }: { today: AttendanceTodayResponse }) {
   const isLongSession = checkedIn && elapsedHours >= LONG_SESSION_WARNING_HOURS
 
   return (
-    <div
-      className="relative flex flex-col gap-5 overflow-hidden rounded-2xl p-6 text-white sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-8"
-      style={{
-        background: 'linear-gradient(135deg, var(--color-spotlight-from), var(--color-spotlight-to))',
-      }}
-    >
+    <div className="relative flex flex-col gap-5 overflow-hidden rounded-3xl border border-white/10 bg-brand-ink p-6 text-white shadow-md sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-8">
       {/* Purely decorative — an ambient glow, not content, so it's hidden from AT. */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -right-10 -top-16 size-56 rounded-full bg-white/10 sm:size-72"
+        className="pointer-events-none absolute -right-16 -top-24 size-64 rounded-full bg-brand-purple/25 blur-3xl sm:size-80"
       />
 
       <div className="relative z-10 min-w-0">
-        <div className="text-xs font-semibold uppercase tracking-widest text-white/90">
+        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-brand-gold">
+          {checkedIn && <span aria-hidden="true" className="size-2 rounded-full bg-[#4ade80]" />}
           {checkedIn ? 'On the clock' : completedToday ? 'Today' : 'Ready when you are'}
         </div>
 
         {checkedIn && elapsed ? (
           <div
-            className="mt-1.5 font-[family-name:var(--font-display)] text-4xl font-bold tabular-nums leading-none sm:text-5xl lg:text-6xl"
+            className="mt-1.5 font-[family-name:var(--font-display)] text-4xl font-semibold tabular-nums leading-none tracking-tight sm:text-5xl lg:text-6xl"
             aria-live="off"
           >
             {elapsed}
@@ -65,10 +62,10 @@ export function CheckInHero({ today }: { today: AttendanceTodayResponse }) {
           </div>
         )}
 
-        <p className="mt-2.5 text-sm text-white/85 sm:text-base">{subtext(today)}</p>
+        <p className="mt-2.5 text-sm text-white/65 sm:text-base">{subtext(today)}</p>
 
         {isLongSession && (
-          <p className="mt-2 flex items-center gap-1.5 text-sm font-medium text-white">
+          <p className="mt-2 flex items-center gap-1.5 text-sm font-medium text-brand-gold">
             <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
             Still checked in from earlier — forgot to check out?
           </p>
@@ -77,7 +74,7 @@ export function CheckInHero({ today }: { today: AttendanceTodayResponse }) {
 
       <Link
         to={checkedIn ? '/attendance/check-out' : '/attendance/check-in'}
-        className="relative z-10 inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-lg bg-white px-7 text-sm font-semibold text-accent-700 shadow-lg shadow-black/20 transition-transform hover:scale-[1.02] active:scale-[0.98] sm:h-13 sm:text-base"
+        className="relative z-10 inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-full border border-white bg-white px-7 text-sm font-semibold text-brand-ink transition-colors hover:bg-transparent hover:text-white active:scale-[0.97] sm:h-13 sm:text-base"
       >
         {checkedIn ? (
           <>

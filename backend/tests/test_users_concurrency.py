@@ -426,3 +426,92 @@ def test_a_conflicting_creation_leaves_no_audit_row(
 
     assert after == before
     assert users == 1
+
+
+# ---------------------------------------------------------------------------
+# Deletion vs. an attendance write for the same person
+# ---------------------------------------------------------------------------
+
+
+def _record_check_in(session: Session, *, tenant_id: uuid.UUID, user_id: uuid.UUID,
+                     lock: bool) -> object:
+    """What an attendance write does, reduced to its locking and its insert.
+
+    ``lock=True`` is the real path (``attendance.service._lock_user`` first, and
+    no write if the person is gone). ``lock=False`` is the deliberately naive one.
+    """
+    from app.models import AttendanceEventType
+    from app.services.attendance import service as attendance_service
+
+    if lock and not attendance_service._lock_user(  # noqa: SLF001 - the real lock
+        session, tenant_id=tenant_id, user_id=user_id
+    ):
+        return "refused"
+    session.add(
+        AttendanceEvent(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            event_type=AttendanceEventType.CHECK_IN.value,
+            verification_status="VERIFIED",
+            verification_metadata={},
+        )
+    )
+    session.flush()
+    return "recorded"
+
+
+def test_a_check_in_racing_a_delete_is_refused_cleanly_and_orphans_nothing(
+    engine: Engine, committed: Fixture
+) -> None:
+    """Delete wins the lock; the check-in then finds nobody and writes nothing."""
+
+    def operation(session: Session, index: int) -> object:
+        if index == 0:
+            actor = session.get(User, committed.admin_ids[0])
+            return users_service.delete_user(
+                session, tenant_id=committed.tenant_id, actor=actor,
+                user_id=committed.staff_id,
+            )
+        return _record_check_in(
+            session, tenant_id=committed.tenant_id,
+            user_id=committed.staff_id, lock=True,
+        )
+
+    result = interleave(engine, operation)
+
+    assert result.second_blocked, "the check-in did not wait for the delete"
+    assert result.second == "refused"
+    with Session(engine) as session:
+        assert session.get(User, committed.staff_id) is None
+        assert session.scalar(
+            select(func.count()).select_from(AttendanceEvent)
+            .where(AttendanceEvent.user_id == committed.staff_id)
+        ) == 0
+
+
+def test_without_the_lock_a_racing_check_in_hits_the_foreign_key(
+    engine: Engine, committed: Fixture
+) -> None:
+    """The naive control: proves the harness really opens the race window."""
+
+    def operation(session: Session, index: int) -> object:
+        if index == 0:
+            actor = session.get(User, committed.admin_ids[0])
+            return users_service.delete_user(
+                session, tenant_id=committed.tenant_id, actor=actor,
+                user_id=committed.staff_id,
+            )
+        try:
+            return _record_check_in(
+                session, tenant_id=committed.tenant_id,
+                user_id=committed.staff_id, lock=False,
+            )
+        except IntegrityError as exc:
+            # The outcome under test - rolled back so the harness's own commit
+            # of this session afterwards is a clean no-op.
+            session.rollback()
+            return exc
+
+    result = interleave(engine, operation)
+
+    assert isinstance(result.second, IntegrityError)

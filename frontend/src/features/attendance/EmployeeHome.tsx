@@ -3,6 +3,7 @@
  * page, not a link off of it. Replaces the old generic "what's next" card
  * for STAFF only — see `pages/HomePage.tsx`.
  */
+import { PageHeader } from '@/components/layout/PageHeader'
 import { ErrorState } from '@/components/feedback/ErrorState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { CheckInHero } from '@/features/attendance/CheckInHero'
@@ -19,23 +20,18 @@ function greeting(): string {
   return 'Good evening'
 }
 
-export function EmployeeHome({ name, tenantName }: { name: string; tenantName?: string }) {
+export function EmployeeHome({ name }: { name: string }) {
   const { data: today, isPending, isError, error, refetch } = useTodayAttendance()
   const firstName = name.trim().split(/\s+/)[0] ?? name
 
   return (
     <div className="flex max-w-4xl flex-col gap-5">
-      <div>
-        <h1 className="font-[family-name:var(--font-display)] text-2xl font-semibold text-foreground sm:text-3xl">
-          {greeting()}, {firstName}
-        </h1>
-        <p className="mt-1 text-sm text-foreground-muted">
-          {new Date().toLocaleDateString(undefined, DATE_FORMAT)}
-          {tenantName ? ` · ${tenantName}` : ''}
-        </p>
-      </div>
+      <PageHeader
+        eyebrow={new Date().toLocaleDateString(undefined, DATE_FORMAT)}
+        title={`${greeting()}, ${firstName}.`}
+      />
 
-      {isPending && <Skeleton className="h-44 w-full rounded-2xl" />}
+      {isPending && <Skeleton className="h-44 w-full rounded-3xl" />}
       {isError && <ErrorState error={error} onRetry={refetch} />}
       {today && <CheckInHero today={today} />}
 

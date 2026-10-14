@@ -6,6 +6,7 @@ import { useForm } from 'react-hook-form'
 import { Alert } from '@/components/ui/Alert'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { brandInputClass } from '@/features/marketing/brandStyles'
 import {
   createOrganizationSchema,
   type CreateOrganizationFormValues,
@@ -56,8 +57,8 @@ export function CreateOrganizationForm() {
   if (created) {
     return (
       <div className="flex flex-col items-center gap-4 text-center">
-        <span className="flex size-14 items-center justify-center rounded-full bg-accent-50">
-          <Mail className="size-6 text-accent-600" aria-hidden="true" />
+        <span className="flex size-14 items-center justify-center rounded-full bg-brand-lilac">
+          <Mail className="size-6 text-brand-purple-deep" aria-hidden="true" />
         </span>
 
         <div>
@@ -82,7 +83,7 @@ export function CreateOrganizationForm() {
           <p className="text-sm text-foreground-muted">New link sent — check your inbox again.</p>
         ) : (
           <Button
-            variant="secondary"
+            variant="brandOutline"
             className="w-full"
             isLoading={resendVerification.isPending}
             onClick={() =>
@@ -103,18 +104,20 @@ export function CreateOrganizationForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
+    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-5" noValidate>
       {submitError !== null && <Alert variant="danger">{describeError(submitError).message}</Alert>}
 
       <Input
         label="Organization name"
         placeholder="Acme Technologies"
+        className={brandInputClass}
         error={errors.organizationName?.message}
         {...register('organizationName')}
       />
       <Input
         label="Organization ID"
         placeholder="acme"
+        className={brandInputClass}
         error={errors.organizationSlug?.message}
         {...register('organizationSlug')}
       />
@@ -129,6 +132,7 @@ export function CreateOrganizationForm() {
         label="Your name"
         autoComplete="name"
         placeholder="Ada Lovelace"
+        className={brandInputClass}
         error={errors.adminName?.message}
         {...register('adminName')}
       />
@@ -136,6 +140,8 @@ export function CreateOrganizationForm() {
         label="Your email"
         type="email"
         autoComplete="email"
+        placeholder="you@company.com"
+        className={brandInputClass}
         error={errors.adminEmail?.message}
         {...register('adminEmail')}
       />
@@ -143,11 +149,12 @@ export function CreateOrganizationForm() {
         label="Password"
         type="password"
         autoComplete="new-password"
+        className={brandInputClass}
         error={errors.adminPassword?.message}
         {...register('adminPassword')}
       />
 
-      <Button type="submit" size="lg" isLoading={createTenant.isPending} className="mt-2">
+      <Button type="submit" variant="brand" size="xl" isLoading={createTenant.isPending} className="mt-1 w-full">
         {createTenant.isPending ? 'Creating…' : 'Create organization'}
       </Button>
     </form>

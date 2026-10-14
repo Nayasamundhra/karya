@@ -14,6 +14,7 @@
  */
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { StatCard, StatCardGrid } from '@/components/ui/StatCard'
 import { useAttendanceHistory } from '@/features/attendance/useAttendanceHistory'
 import { formatHours } from '@/features/attendance/formatters'
 import type { AttendanceDayResponse, AttendanceSessionResponse, AttendanceTodayResponse } from '@/lib/api/types'
@@ -101,26 +102,11 @@ export function WeekStats({ today }: { today?: AttendanceTodayResponse }) {
   const streakDays = streak(daysNewestFirst)
 
   return (
-    <div className="grid grid-cols-3 gap-2 sm:gap-4">
-      <StatTile label="This week" value={formatHours(totalHours)} />
-      <StatTile label="Today" value={formatHours(todayHours)} />
-      <StatTile label="Streak" value={streakDays === 1 ? '1 day' : `${streakDays} days`} />
-    </div>
-  )
-}
-
-function StatTile({ label, value }: { label: string; value: string }) {
-  return (
-    <Card className="min-w-0">
-      <CardContent className="flex flex-col gap-1 p-3 sm:p-5">
-        <span className="truncate text-[11px] font-semibold uppercase tracking-wide text-foreground-muted sm:text-xs">
-          {label}
-        </span>
-        <span className="truncate font-[family-name:var(--font-display)] text-lg font-semibold text-employee-700 sm:text-2xl">
-          {value}
-        </span>
-      </CardContent>
-    </Card>
+    <StatCardGrid ariaLabel="Week overview" columns={3}>
+      <StatCard label="This week" value={formatHours(totalHours)} hue="employee" />
+      <StatCard label="Today" value={formatHours(todayHours)} hue="employee" />
+      <StatCard label="Streak" value={streakDays === 1 ? '1 day' : `${streakDays} days`} hue="employee" />
+    </StatCardGrid>
   )
 }
 

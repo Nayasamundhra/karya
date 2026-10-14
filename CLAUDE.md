@@ -222,8 +222,16 @@ delete-orphan"`) — see `backend/README.md` §9.
   correlation ids, security headers and request-size limits are deliberately
   stdlib + what FastAPI already brings — don't reach for a third-party package
   for adjacent needs without a strong reason.
-- **Nothing is ever deleted** — there is no `DELETE` route anywhere in the API.
-  Users move between `ACTIVE`/`INACTIVE`; attendance events are immutable.
+- **Retire people by deactivating them; delete is the one deliberate exception.**
+  Users normally move between `ACTIVE`/`INACTIVE` and keep their history;
+  attendance events are immutable and are never edited or deleted on their own.
+  The only `DELETE` in the API is `DELETE /users/{user_id}` — an irreversible,
+  `TENANT_ADMIN`-only erasure of an **employee or manager and their attendance
+  history** (never a `TENANT_ADMIN`, never yourself), added at the project
+  owner's explicit request. It deletes the events explicitly (the FK stays
+  `RESTRICT`), locks the user row like check-in/out does, and writes a
+  `USER_DELETED` audit row holding the only remaining copy of who was removed.
+  Do not add other delete routes, or loosen who can be deleted, without asking.
 
 ### Database access is synchronous, deliberately
 

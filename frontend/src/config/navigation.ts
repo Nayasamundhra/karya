@@ -6,7 +6,7 @@
  * entry here, not touching the shell.
  */
 import type { LucideIcon } from 'lucide-react'
-import { Building2, CalendarClock, LayoutDashboard, User, Users } from 'lucide-react'
+import { BarChart3, Building2, CalendarClock, LayoutDashboard, User, Users } from 'lucide-react'
 
 import { isUserRole, type UserRole } from '@/lib/api/types'
 
@@ -44,6 +44,17 @@ export const NAV_ITEMS: readonly NavItem[] = [
     icon: Users,
     roles: ['MANAGER', 'TENANT_ADMIN'],
     showInBottomNav: true,
+  },
+  {
+    id: 'team-hours',
+    label: 'Hours',
+    to: '/team/hours',
+    icon: BarChart3,
+    roles: ['MANAGER', 'TENANT_ADMIN'],
+    // Bottom nav is already at 4 items for MANAGER (home/attendance/team/
+    // profile); a glanceable secondary view doesn't need to compete for that
+    // slot — reachable via the desktop sidebar and the mobile overflow menu.
+    showInBottomNav: false,
   },
   {
     id: 'admin-users',

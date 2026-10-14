@@ -3,7 +3,8 @@
  * same responsive split as `TeamAttendanceTable`. Each row's actions (edit,
  * change role, activate/deactivate) open one of the dedicated dialogs; the
  * destructive one (deactivate) goes through `ConfirmationDialog` first
- * (§13). Every mutation result — success or the backend's own refusal
+ * (§13); permanent deletion goes through its own typed-confirmation dialog.
+ * Every mutation result — success or the backend's own refusal
  * message (last-admin, self-change) — surfaces via `toast`/`describeError`,
  * never a client-invented rule (§15/§23).
  */
@@ -18,11 +19,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/DropdownMenu'
 import { EmptyState } from '@/components/feedback/EmptyState'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/Table'
+import { useAuth } from '@/features/auth/useAuth'
 import { ChangeRoleDialog } from '@/features/users/admin/ChangeRoleDialog'
+import { DeleteEmployeeDialog } from '@/features/users/admin/DeleteEmployeeDialog'
 import { EditEmployeeDialog } from '@/features/users/admin/EditEmployeeDialog'
 import { roleLabel } from '@/features/users/admin/roleLabels'
 import { useActivateEmployee, useDeactivateEmployee } from '@/features/users/admin/useUserMutations'
@@ -34,6 +38,8 @@ export function EmployeeTable({ employees }: { employees: UserDetailResponse[] }
   const [editTarget, setEditTarget] = useState<UserDetailResponse | null>(null)
   const [roleTarget, setRoleTarget] = useState<UserDetailResponse | null>(null)
   const [deactivateTarget, setDeactivateTarget] = useState<UserDetailResponse | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<UserDetailResponse | null>(null)
+  const { user: currentUser } = useAuth()
   const activateEmployee = useActivateEmployee()
   const deactivateEmployee = useDeactivateEmployee()
 
@@ -54,6 +60,13 @@ export function EmployeeTable({ employees }: { employees: UserDetailResponse[] }
     } catch (error) {
       toast.error('Could not deactivate employee', describeError(error).message)
     }
+  }
+
+  /** A courtesy, not the rule: the backend refuses deleting yourself or an
+   * administrator regardless of what this shows. Hiding it just avoids
+   * offering an action that can only fail. */
+  function canDelete(employee: UserDetailResponse): boolean {
+    return employee.role !== 'TENANT_ADMIN' && employee.id !== currentUser?.id
   }
 
   if (employees.length === 0) {
@@ -92,6 +105,7 @@ export function EmployeeTable({ employees }: { employees: UserDetailResponse[] }
                     onChangeRole={() => setRoleTarget(employee)}
                     onDeactivate={() => setDeactivateTarget(employee)}
                     onActivate={() => handleActivate(employee)}
+                    onDelete={canDelete(employee) ? () => setDeleteTarget(employee) : undefined}
                   />
                 </TableCell>
               </TableRow>
@@ -119,6 +133,7 @@ export function EmployeeTable({ employees }: { employees: UserDetailResponse[] }
                   onChangeRole={() => setRoleTarget(employee)}
                   onDeactivate={() => setDeactivateTarget(employee)}
                   onActivate={() => handleActivate(employee)}
+                  onDelete={canDelete(employee) ? () => setDeleteTarget(employee) : undefined}
                 />
               </CardContent>
             </Card>
@@ -131,6 +146,9 @@ export function EmployeeTable({ employees }: { employees: UserDetailResponse[] }
       )}
       {roleTarget && (
         <ChangeRoleDialog open onOpenChange={(open) => !open && setRoleTarget(null)} employee={roleTarget} />
+      )}
+      {deleteTarget && (
+        <DeleteEmployeeDialog open onOpenChange={(open) => !open && setDeleteTarget(null)} employee={deleteTarget} />
       )}
       {deactivateTarget && (
         <ConfirmationDialog
@@ -157,12 +175,15 @@ function RowActions({
   onChangeRole,
   onDeactivate,
   onActivate,
+  onDelete,
 }: {
   employee: UserDetailResponse
   onEdit: () => void
   onChangeRole: () => void
   onDeactivate: () => void
   onActivate: () => void
+  /** Omitted when deletion isn't offered for this row (yourself, an administrator). */
+  onDelete?: () => void
 }) {
   return (
     <DropdownMenu>
@@ -180,6 +201,14 @@ function RowActions({
           </DropdownMenuItem>
         ) : (
           <DropdownMenuItem onSelect={onActivate}>Activate</DropdownMenuItem>
+        )}
+        {onDelete && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem destructive onSelect={onDelete}>
+              Delete…
+            </DropdownMenuItem>
+          </>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

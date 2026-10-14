@@ -75,6 +75,12 @@ export function deactivateUser(userId: string): Promise<UserDetailResponse> {
   return apiFetch<UserDetailResponse>(`/api/v1/users/${userId}/deactivate`, { method: 'POST' })
 }
 
+/** Permanent and irreversible — removes the user and their attendance history.
+ * The backend answers 204 with no body (`apiFetch` resolves that to `null`). */
+export function deleteUser(userId: string): Promise<null> {
+  return apiFetch<null>(`/api/v1/users/${userId}`, { method: 'DELETE' })
+}
+
 export function getUserAudit(
   userId: string,
   params: { page?: number; pageSize?: number } = {},
